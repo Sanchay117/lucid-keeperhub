@@ -1,0 +1,21 @@
+{
+  "name": "settlement-agent-example",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "node --experimental-strip-types src/index.ts"
+  },
+  "dependencies": {
+    "@hono/node-server": "^2.1.1",
+    "@lucid-agents/core": "^5.0.0",
+    "@lucid-agents/hono": "^1.0.2",
+    "@lucid-agents/http": "^4.0.0",
+    "@lucid-agents/payments": "^5.0.0",
+    "lucid-keeperhub": "file:../..",
+    "zod": "4.4.3"
+  },
+  "overrides": {
+    "zod": "4.4.3"
+  }
+}
