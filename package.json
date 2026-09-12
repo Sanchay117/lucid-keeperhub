@@ -1,0 +1,66 @@
+{
+  "name": "lucid-keeperhub",
+  "version": "0.1.0",
+  "description": "Deterministic onchain settlement for Lucid Agents, executed through KeeperHub.",
+  "type": "module",
+  "main": "./dist/index.js",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "engines": {
+    "node": ">=20.9"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "type-check": "tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "demo": "node --experimental-strip-types scripts/demo.ts"
+  },
+  "keywords": [
+    "lucid-agents",
+    "keeperhub",
+    "x402",
+    "agent-economy",
+    "settlement",
+    "onchain"
+  ],
+  "license": "MIT",
+  "peerDependencies": {
+    "@lucid-agents/core": ">=5",
+    "@lucid-agents/types": ">=3",
+    "zod": "4.4.3"
+  },
+  "peerDependenciesMeta": {
+    "@lucid-agents/core": {
+      "optional": true
+    },
+    "@lucid-agents/types": {
+      "optional": true
+    },
+    "zod": {
+      "optional": true
+    }
+  },
+  "devDependencies": {
+    "@lucid-agents/core": "^5.0.0",
+    "@lucid-agents/types": "^3.0.0",
+    "@types/node": "^22.10.0",
+    "typescript": "^5.7.0",
+    "vitest": "^2.1.8",
+    "zod": "4.4.3"
+  },
+  "overrides": {
+    "zod": "4.4.3"
+  }
+}
