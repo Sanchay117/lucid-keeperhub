@@ -7,11 +7,12 @@
  *
  * Usage:
  *   cp .env.example .env   # fill in KEEPERHUB_API_KEY and DEMO_RECIPIENT
- *   node --experimental-strip-types --env-file=.env scripts/demo.ts
+ *   npm run demo           # builds, then runs this with .env loaded
  */
 
-import { KeeperHubClient } from "../src/client.js";
-import { settleTransfer } from "../src/settle.js";
+// Imports the built package: Node strips types but does not rewrite the `.js`
+// specifiers the sources use for NodeNext, so the sources cannot run directly.
+import { KeeperHubClient, settleTransfer } from "../dist/index.js";
 
 const required = (name: string): string => {
   const value = process.env[name];

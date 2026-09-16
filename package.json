@@ -25,7 +25,7 @@
     "type-check": "tsc --noEmit",
     "test": "vitest run",
     "test:watch": "vitest",
-    "demo": "node --experimental-strip-types scripts/demo.ts"
+    "demo": "npm run build && node --experimental-strip-types --env-file=.env scripts/demo.ts"
   },
   "keywords": [
     "lucid-agents",

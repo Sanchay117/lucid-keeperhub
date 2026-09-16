@@ -234,7 +234,7 @@ call to show no second transaction is sent.
 
 ```bash
 cp .env.example .env      # KEEPERHUB_API_KEY, DEMO_RECIPIENT
-node --experimental-strip-types --env-file=.env scripts/demo.ts
+npm run demo
 ```
 
 ## Develop
