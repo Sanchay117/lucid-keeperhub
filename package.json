@@ -21,6 +21,7 @@
     "node": ">=20.9"
   },
   "scripts": {
+    "prepare": "npm run build",
     "build": "tsc -p tsconfig.build.json",
     "type-check": "tsc --noEmit",
     "test": "vitest run",
@@ -63,5 +64,9 @@
   },
   "overrides": {
     "zod": "4.4.3"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Sanchay117/lucid-keeperhub.git"
   }
 }

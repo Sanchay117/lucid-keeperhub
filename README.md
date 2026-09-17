@@ -170,8 +170,10 @@ learns this seller settles deterministically before it invokes anything:
 ## Install
 
 ```bash
-npm install lucid-keeperhub
+npm install github:Sanchay117/lucid-keeperhub
 ```
+
+Not yet published to npm; installing from GitHub builds the package on install.
 
 **Pin zod to `4.4.3`.** `@lucid-agents/core@5` depends on exactly that version as
 a hard dependency, so any other 4.x resolves a second copy and every
