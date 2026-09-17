@@ -29,14 +29,15 @@ const runtime = await createAgent({ name: 'payout', version: '1.0.0' })
 
 ![Settlement console](docs/console.png)
 
-Demo video: [docs/demo.mp4](docs/demo.mp4) (2.5 min, recorded against Ethereum Sepolia by `scripts/video/record.mjs`).
+Demo video: [docs/demo.mp4](docs/demo.mp4) (3.5 min, narrated). It is recorded end to end against Base Sepolia and Ethereum Sepolia by `scripts/video/record.mjs`: a real x402 purchase, the retry and restart scenarios, and both transactions on a public explorer.
 
 ## Proof
 
-Executed through KeeperHub on Ethereum Sepolia, gas sponsored by KeeperHub:
+Payouts executed through KeeperHub on Ethereum Sepolia with KeeperHub-sponsored gas; x402 payments on Base Sepolia:
 
 | Run | Transaction | What it shows |
 | --- | --- | --- |
+| x402 purchase | payment [0x722b08ed...e407](https://base-sepolia.blockscout.com/tx/0x722b08ed35d475c10f4eedfc8cf4960506a23244b019f64b415635be38ffe407) (Base Sepolia), payout [0x15e03fa1...6cf4](https://sepolia.etherscan.io/tx/0x15e03fa1907f44c99cfa2382dcb5dc65a6eb379be650763150c7c124a6c26cf4) (Sepolia) | A buyer agent paid 0.01 USDC over x402 to the seller's KeeperHub wallet, then KeeperHub executed the payout it bought |
 | `npm run demo` | [0x1fea0eda...8ee2](https://sepolia.etherscan.io/tx/0x1fea0eda66c0be15da490376f1b84c3ffa2831ce22127b68794a9cc478398ee2) | Dry run, settle, then an identical replay that returned this same transaction |
 | Demo console | [0xc7a97c37...b196](https://sepolia.etherscan.io/tx/0xc7a97c370a484ff69003386bd5fec25941da074f1dcd0c59b70e01529a31b196) | Five settle requests (retry, seller restart then retry, no key, overdraw) and exactly one transfer |
 
