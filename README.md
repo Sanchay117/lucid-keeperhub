@@ -3,20 +3,22 @@
 **Deterministic onchain settlement for [Lucid Agents](https://github.com/daydreamsai/lucid-agents), executed through [KeeperHub](https://keeperhub.com).**
 
 A Lucid extension that gives a selling agent somewhere safe to put the onchain
-half of its work.
+half of its work: dry-run preflight, broadcast through KeeperHub's executor, a
+verifiable transaction hash for the buyer, and a guarantee that a retried
+request does not pay twice, even across a seller restart.
 
 ```ts
 const runtime = await createAgent({ name: 'payout', version: '1.0.0' })
   .use(http())
-  .use(keeperhub({ defaultChainId: 84532 }))
+  .use(keeperhub({ defaultChainId: 11155111, requireIdempotencyKey: true }))
   .addEntrypoint({
     key: 'settle',
     input: z.object({ recipient: z.string(), amount: z.string() }),
     metadata: { keeperhub: { settles: true } },
-    handler: async ({ input, runId, runtime }) => {
-      const outcome = await runtime.keeperhub.settle(
-        { recipientAddress: input.recipient, amount: input.amount },
-        { workId: runId },          // <- the whole guarantee hangs off this
+    handler: async (ctx) => {
+      const outcome = await ctx.runtime.keeperhub.settle(
+        { recipientAddress: ctx.input.recipient, amount: ctx.input.amount },
+        { context: ctx },   // anchors KeeperHub's idempotency to the buyer's request
       );
       return { output: { tx: outcome.transactionLink } };
     },
@@ -24,121 +26,144 @@ const runtime = await createAgent({ name: 'payout', version: '1.0.0' })
   .build();
 ```
 
----
+![Settlement console](docs/console.png)
+
+## Proof
+
+Executed through KeeperHub on Ethereum Sepolia, gas sponsored by KeeperHub:
+
+| Run | Transaction | What it shows |
+| --- | --- | --- |
+| `npm run demo` | [0x1fea0eda...8ee2](https://sepolia.etherscan.io/tx/0x1fea0eda66c0be15da490376f1b84c3ffa2831ce22127b68794a9cc478398ee2) | Dry run, settle, then an identical replay that returned this same transaction |
+| Demo console | [0xc7a97c37...b196](https://sepolia.etherscan.io/tx/0xc7a97c370a484ff69003386bd5fec25941da074f1dcd0c59b70e01529a31b196) | Five settle requests (retry, seller restart then retry, no key, overdraw) and exactly one transfer |
 
 ## Why this exists
 
-Lucid Agents is explicit about its boundary. From the project README:
+Lucid Agents is explicit about its boundary. It provides one runtime for
+schemas, payment admission, policy, idempotency, fulfillment, discovery and
+accounting, **while wallets, payment protocols, networks, and facilitators
+remain external.**
 
-> It provides one runtime for schemas, payment admission, policy, idempotency,
-> fulfillment, discovery, and accounting **while wallets, payment protocols,
-> networks, and facilitators remain external.**
-
-That boundary is a good one, but it leaves a hole on the fulfillment side. An
-agent that *sells onchain work* — a payout service, a rebalancer, a treasury
-bot, anything where delivery means moving value — has nowhere to put the
-execution. In practice it ends up doing this inside the handler:
+That leaves a hole on the fulfillment side. An agent that *sells onchain work*
+(a payout service, a rebalancer, a treasury bot) has nowhere to put the
+execution, so in practice it does this inside the handler:
 
 ```ts
-// The status quo, and every problem with it
 const wallet = new ethers.Wallet(process.env.PRIVATE_KEY!, provider);
 const tx = await wallet.sendTransaction({ to: input.recipient, value });
 ```
 
 Private key in process memory. No dry run, so a revert is discovered by paying
-gas for it. No nonce management, so a stuck transaction wedges the agent. No
-audit trail, so "did we pay them?" is answered by grepping logs. And no
-idempotency, so **a buyer who retries a timed-out call gets paid twice.**
-
-That last one is not hypothetical. It is the default behaviour of the code
-above, and an LLM-driven caller retries far more eagerly than a human does.
+gas for it. No nonce management. No audit trail. And no idempotency, so a buyer
+that retries a timed-out call is paid twice, which is the default behaviour of
+the code above and exactly what an LLM-driven caller does.
 
 This extension replaces that block with KeeperHub: non-custodial Turnkey
-wallets, dry-run preflight, nonce management, private routing, retries with
-backoff, and a per-execution audit trail — reached through one typed runtime
-slice.
+wallets, dry-run preflight, nonce management, retries, and a per-execution
+audit trail, behind one typed runtime slice.
 
-## What it does that a wrapper does not
+## How a request flows
 
-Five things here are load-bearing. Each exists because of a documented
-KeeperHub behaviour that a naive client gets wrong.
+```mermaid
+sequenceDiagram
+    participant B as Buyer agent
+    participant L as Lucid HTTP layer
+    participant H as settle handler
+    participant K as KeeperHub
+    participant C as Chain
 
-### 1. Idempotency keys anchored to the Lucid `runId`
+    B->>L: POST /entrypoints/settle/invoke<br/>Idempotency-Key: order-123
+    alt Lucid remembers the key
+        L-->>B: stored response (Idempotency-Replayed: true)
+    else first request, or Lucid forgot (restart, other instance)
+        L->>H: invoke with a new runId
+        H->>K: dry run (simulate: true)
+        K-->>H: gas estimate, or revert / shortfall
+        H->>K: transfer, Idempotency-Key derived from order-123
+        alt KeeperHub has seen that key
+            K-->>H: original execution (idempotentReplay: true)
+        else new work
+            K->>C: broadcast
+            K-->>H: executionId, tx hash
+        end
+        H->>K: read stored execution (receipt, sponsorship)
+        H-->>B: status, tx hash, replayed
+    end
+```
 
-KeeperHub deduplicates fund-moving requests on a caller-supplied
-`Idempotency-Key`, and its docs are blunt about the trap:
+## What makes it an integration rather than a wrapper
 
-> A UUID generated per attempt does not survive a retry: the second attempt
-> generates a different UUID, so the request is treated as new and executes
-> again.
+### 1. Two layers of idempotency, anchored to the buyer's key
 
-Lucid already hands every handler a `runId` that is stable across a retry of
-that invocation. Passing it as `workId` is the entire fix — the key is derived
-from the work rather than persisted before it, so any process can reproduce it.
+The obvious anchor inside a Lucid handler is `runId`. It is the wrong one.
+`@lucid-agents/http` mints a fresh `crypto.randomUUID()` for every HTTP
+request, so a buyer that retries arrives with a new `runId`, and a settlement
+keyed on it is new work to KeeperHub.
 
-### 2. Body canonicalization, which closes the 409 trap
+Lucid does replay retries that carry an `Idempotency-Key`, but from a
+process-local store by default. A seller restart, a second instance behind a
+load balancer, or an in-progress claim that outlives its TTL all run the handler
+again, with a new `runId`.
 
-KeeperHub hashes the request body to detect conflicts, and normalizes key order
-but **not values**. So a body that is *rebuilt* rather than replayed conflicts
-with work already in flight:
+So `settle({ context: ctx })` anchors the KeeperHub `Idempotency-Key` to the
+buyer's `Idempotency-Key`, scoped by entrypoint and verified caller. Whatever
+Lucid's HTTP layer forgets, KeeperHub's execution-level record still matches the
+retry to the transfer that already happened. `src/__tests__/http-retry.test.ts`
+proves it through the real Lucid HTTP stack: settle, restart the seller, retry;
+the handler runs again with a new `runId` and KeeperHub still sends one
+transfer. The control, anchored to `runId`, sends two.
 
-> `hashRequest` normalizes key order but not values, so `"0.1"` against
-> `"0.10"`, `network` in place of `chainId`, or a reworded memo all produce a
-> conflict for work that is already under way.
+`requireIdempotencyKey: true` refuses to settle a request that carries no key,
+because nothing could make its retry safe.
 
-The documented remedy is to canonicalize the body and keep the key. This
-package canonicalizes amounts (string-based, so precision is never lost to a
-float round-trip), lowercases addresses, and unifies chain-id spellings — then
-derives the key from that same canonical form, so the key and the body can
-never disagree about what the work is.
+### 2. Body canonicalization, which closes KeeperHub's 409 trap
+
+KeeperHub hashes the request body to detect idempotency conflicts and
+normalizes key order but not values, so a rebuilt body (`"0.1"` vs `"0.10"`, a
+checksummed vs lowercase address, `1` vs `"1"`) conflicts with work already in
+flight. Amounts are canonicalized with string arithmetic, never a float
+round-trip, and the key is derived from that same canonical body, so key and
+body cannot disagree.
 
 ### 3. Two-phase settlement, with proof recovered rather than assumed
 
-The execute endpoints return a transaction hash **only when the step reported
-success**. A `failed` or `unconfirmed` response carries none — including when a
-transaction really was broadcast and only its receipt could not be confirmed.
-Treating "no hash" as "nothing happened" is precisely how an agent double-pays.
-
-`settleTransfer` therefore always reads the stored execution back. It also
-surfaces `sponsored`, without which verification goes wrong in the other
-direction: a sponsored execution never touches the org EOA's nonce or balance,
-so checking EOA state concludes nothing happened even on success.
+The execute endpoints return a hash only when the step reported success. A
+`failed` or `unconfirmed` response carries none, even when a transaction really
+was broadcast. `settleTransfer` always reads the stored execution back, surfaces
+`sponsored` (a sponsored transfer never touches the org EOA's nonce, so EOA
+checks conclude nothing happened), and treats a verified reverted receipt as a
+failure even though a hash exists.
 
 ### 4. A retry policy that cannot double-send
 
 | Condition | Retried? | Why |
 | --- | --- | --- |
-| `429` rate limit | yes | Rejected before execution; repeating is safe. |
-| `5xx` / dropped connection, **with** an idempotency key | yes | KeeperHub can match the retry to the original. |
-| `5xx` / dropped connection, **without** a key | **no** | May have executed. Nothing can match the retry. |
-| Any failure carrying a `transactionHash` | **no** | A transaction is already live; a retry signs a second. |
-| `idempotency_in_progress` | yes, **same key** | Rotating escapes the in-progress guard. |
+| `429` rate limit | yes, honouring `Retry-After` | Rejected before execution. |
+| `5xx` or dropped connection, with an idempotency key | yes | KeeperHub matches the retry to the original. |
+| `5xx` or dropped connection, without a key | no | It may have executed, and nothing can match a retry. |
+| Any failure carrying a `transactionHash` | no | A transaction is already live; a retry signs a second. |
+| `idempotency_in_progress` | yes, same key | Rotating escapes the in-progress guard. |
 | Revert, scope, spend cap | no | Repeating cannot change the outcome. |
 
-Failures that cannot be attributed default to *not* retryable. A misclassified
-retry on a value-moving call is strictly worse than an error a human looks at.
+Errors follow KeeperHub's mandated discriminator order (`code`, then
+`failureKind`, then `wouldRevert`), and anything unattributable defaults to not
+retryable.
 
-### 5. Discovery, so buyers can find deterministic settlement
+### 5. Discovery
 
-The extension's `onManifestBuild` hook adds a capability entry to the A2A agent
-card:
+`onManifestBuild` adds the capability to the A2A agent card, so a buying agent
+learns this seller settles deterministically before it invokes anything:
 
 ```json
 {
   "uri": "https://docs.keeperhub.com/api/direct-execution",
   "params": {
     "settlingEntrypoints": ["settle"],
-    "defaultChainId": "84532",
+    "defaultChainId": "11155111",
     "auditTrail": true, "dryRun": true, "idempotent": true
   }
 }
 ```
-
-A buying agent reading `/.well-known/agent-card.json` learns that this seller
-settles deterministically and publishes an audit trail — without invoking
-anything to find out. In an agent economy where sellers are chosen
-programmatically, that is the difference between a claim and a discoverable
-property.
 
 ## Install
 
@@ -146,20 +171,13 @@ property.
 npm install lucid-keeperhub
 ```
 
-> **Pin zod to `4.4.3`.** `@lucid-agents/core@5` depends on exactly `zod@4.4.3`
-> (a hard dependency, not a peer). Any other 4.x resolves a second copy under
-> `@lucid-agents/core/node_modules`, and the two are nominally incompatible —
-> every `addEntrypoint` schema then fails to typecheck with a confusing
-> `$ZodCheck` mismatch. Add `"overrides": { "zod": "4.4.3" }` to your
-> `package.json`.
+**Pin zod to `4.4.3`.** `@lucid-agents/core@5` depends on exactly that version as
+a hard dependency, so any other 4.x resolves a second copy and every
+`addEntrypoint` schema fails to typecheck with a `$ZodCheck` mismatch. Add
+`"overrides": { "zod": "4.4.3" }` to `package.json`.
 
-A KeeperHub organization API key is required. Create one under **Settings >
-Developer**. Broadcasting needs the `mcp:write` scope; a dry run works with
-`mcp:read`, so a read-only key is a safe way to try this out.
-
-```bash
-export KEEPERHUB_API_KEY=kh_...
-```
+You need a KeeperHub organization API key from **Settings > Developer**.
+Broadcasting needs the `mcp:write` scope; a dry run works with `mcp:read`.
 
 ## API
 
@@ -168,107 +186,102 @@ export KEEPERHUB_API_KEY=kh_...
 | Option | Default | Meaning |
 | --- | --- | --- |
 | `apiKey` | `$KEEPERHUB_API_KEY` | Organization API key. |
-| `baseUrl` | `https://app.keeperhub.com` | Override for self-hosted. |
-| `defaultChainId` | — | Chain used when a call omits one. |
+| `defaultChainId` | none | Chain used when a call omits one. |
+| `requireIdempotencyKey` | `false` | Refuse to settle a request without an `Idempotency-Key`. |
 | `advertise` | `true` | Publish the capability in the agent card. |
-| `settlementDefaults` | — | `preflight`, `confirm`, `maxPolls`, `pollIntervalMs`. |
-| `maxAttempts` | `4` | Attempts for retryable failures. |
-| `timeoutMs` | `60000` | Per-request timeout. |
+| `settlementDefaults` | none | `preflight`, `confirm`, `maxPolls`, `pollIntervalMs`. |
+| `baseUrl` | `https://app.keeperhub.com` | Override for self-hosted. |
+| `maxAttempts` / `timeoutMs` | `4` / `60000` | Retry and timeout budget. |
 
-Ordered `after: ['payments', 'mpp']` — settlement is fulfillment, so it must
-not run before payment admission has decided whether the invocation is entitled
-to be fulfilled.
+Ordered `after: ['payments', 'mpp']`: settlement is fulfillment, so it runs
+after payment admission has decided the invocation is entitled to it.
 
 ### `runtime.keeperhub`
 
 | Method | Purpose |
 | --- | --- |
-| `settle(request, options)` | Preflight, broadcast, confirm. Pass `{ workId: runId }`. |
-| `simulate(request, signal?)` | Dry run. Never signs. Safe under `mcp:read`. |
-| `status(executionId)` | The stored execution — authoritative for a hash. |
+| `settle(request, { context: ctx })` | Preflight, broadcast, confirm, keyed to the buyer's request. |
+| `simulate(request)` | Dry run. Never signs. Returns gas estimate and sending wallet. |
+| `status(executionId)` | KeeperHub's stored execution, the authoritative record. |
 | `spendCap()` | Daily native-value caps. |
 | `settlingEntrypoints()` | Entrypoints that declared settlement. |
 | `client` | The underlying `KeeperHubClient`. |
 
-`settle` resolves rather than throwing for onchain failure — a reverted
-transfer is an outcome to report to a buyer, not an exception. It throws only
-for conditions no per-request handling can fix: bad credentials, insufficient
-scope, unprovisioned wallet.
+`settle` resolves rather than throwing for onchain failure: a reverted or
+underfunded transfer is an outcome to report to the buyer. It throws only for
+conditions per-request handling cannot fix (bad credentials, scope, missing
+wallet). Outcomes include `workIdSource` (`idempotency-key`, `run-id` or
+`explicit`) so a caller can see how safe a retry was.
 
-### Declaring settlement on an entrypoint
+Declaring `metadata: { keeperhub: { settles: true, chainId } }` on an entrypoint
+is validated at build time: an entrypoint that settles but names no chain fails
+the build instead of the first paid request.
 
-```ts
-metadata: { keeperhub: { settles: true, chainId: 8453 } }
-```
-
-Validated at **build time**, not first invocation. An entrypoint that declares
-settlement but can name no chain fails the build — discovering that after
-taking a buyer's money is the expensive version.
-
-## Run the example
-
-A complete agent that sells settlement for x402 USDC and delivers it through
-KeeperHub. Payments are optional, so it runs with a KeeperHub key alone.
+## Run it
 
 ```bash
 npm install && npm run build
-cd examples/settlement-agent
-npm install
-KEEPERHUB_API_KEY=kh_... node --experimental-strip-types src/index.ts
+cp .env.example .env    # KEEPERHUB_API_KEY, DEMO_RECIPIENT, KEEPERHUB_CHAIN_ID
 ```
 
+**Terminal demo.** Reads the spend cap, dry-runs, settles, prints the explorer
+link, then replays the identical call and asserts the same transaction comes
+back.
+
 ```bash
-curl localhost:8787/.well-known/agent-card.json     # see the advertised capability
-curl -X POST localhost:8787/entrypoints/quote/invoke \
+npm run demo
+```
+
+**Agent and demo console.**
+
+```bash
+cd examples/settlement-agent && npm install
+set -a && . ../../.env && set +a
+node --experimental-strip-types src/index.ts
+```
+
+Open `http://localhost:8787/demo`. Every button calls the agent's real Lucid
+entrypoints. Or call them directly:
+
+```bash
+curl localhost:8787/.well-known/agent-card.json
+curl -X POST localhost:8787/entrypoints/settle/invoke \
   -H 'Content-Type: application/json' \
-  -d '{"input":{"recipient":"0x...","amount":"0.001"}}'
+  -H 'Idempotency-Key: order-0001-a1b2c3d4e5f6' \
+  -d '{"input":{"recipient":"0x...","amount":"0.0001"}}'
 ```
 
 Set `PAYMENTS_FACILITATOR_URL`, `PAYMENTS_RECEIVABLE_ADDRESS` and
-`PAYMENTS_NETWORK` to price the `settle` entrypoint in x402 USDC.
-
-## Run the demo
-
-Settles for real and prints a block-explorer link, then replays the identical
-call to show no second transaction is sent.
-
-```bash
-cp .env.example .env      # KEEPERHUB_API_KEY, DEMO_RECIPIENT
-npm run demo
-```
+`PAYMENTS_NETWORK` to price `settle` in x402 USDC.
 
 ## Develop
 
 ```bash
-npm install
 npm run type-check
-npm test          # 69 tests
+npm test        # 85 tests
 npm run build
 ```
 
-Tests run against the real `@lucid-agents/core` runtime rather than a stand-in:
-the extension contract — slice conflicts, ordering, entrypoint hooks, manifest
-composition — is enforced by Lucid's own builder, so a mock would prove nothing
-about whether this actually installs.
+Tests run against the real `@lucid-agents/core` and `@lucid-agents/http`
+runtimes, not stand-ins: extension ordering, slice conflicts, entrypoint hooks,
+manifest composition and HTTP idempotency are all enforced by Lucid's own code.
+Only KeeperHub is stubbed.
 
 ## Limitations
 
-Stated plainly, because they are the honest edges:
-
-- **Transfers are the settled path.** `contractCall` is exposed on the client
-  and typed, but `settle()` wraps transfers only. Arbitrary contract calls go
-  through `runtime.keeperhub.client.contractCall` without the two-phase wrapper.
-- **EVM only.** KeeperHub's Solana path exists; nothing here targets it.
-- **Polling, not webhooks.** `settle` polls the status endpoint. KeeperHub
-  workflows can call back; wiring that to a Lucid entrypoint is the obvious
-  next step and is not done.
-- **Scientific-notation amounts pass through uncanonicalized.** There is no
-  single unambiguous decimal form to produce without arbitrary-precision
-  arithmetic, so `1e-1` is left alone rather than guessed at. Send plain
-  decimals.
-- **The 24h replay window is the caller's problem for slow cadences.**
-  `occurrenceMs` buckets keys for work recurring slower than a day, but you
-  have to pass it.
+- **Transfers are the settled path.** `contractCall` is typed on the client,
+  but `settle()` wraps native and ERC-20 transfers only.
+- **EVM only.** KeeperHub's Solana path is not targeted.
+- **Polling, not callbacks.** `settle` polls the status endpoint.
+- **The x402 path is the least exercised.** The agent prices `settle` in x402
+  USDC when payments are configured, but the recorded runs use free
+  entrypoints and real KeeperHub settlement.
+- **`runId` fallback is weak by design.** Without an `Idempotency-Key` the
+  settlement is safe only against retries inside one invocation. Use
+  `requireIdempotencyKey` where that is not enough.
+- **KeeperHub replays for 24 hours.** A retry after that window is new work.
+  `occurrenceMs` buckets keys for jobs recurring slower than a day.
+- **Scientific-notation amounts are not canonicalized.** Send plain decimals.
 
 ## License
 
