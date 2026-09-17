@@ -18,6 +18,8 @@ let seller = await buildSeller();
 
 const demo = createDemo({
   getSeller: () => seller,
+  // The buyer reaches the seller over real HTTP, as a separate agent would.
+  sellerUrl: `http://localhost:${PORT}`,
   // A restart in the sense that matters here: a new runtime, and with it an
   // empty Lucid idempotency store. Swapped before the old one is closed so no
   // request lands on a closed runtime.

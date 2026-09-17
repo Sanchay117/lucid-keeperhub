@@ -52,6 +52,47 @@ const SettleOutput = z.object({
 
 export type Seller = Awaited<ReturnType<typeof buildSeller>>;
 
+/** Price of one payout to a buying agent, in USD, settled as USDC over x402. */
+export const PAYOUT_PRICE = process.env.PAYOUT_PRICE_USD ?? "0.01";
+
+type SettleContext = {
+  key: string;
+  runId?: string;
+  metadata?: Record<string, unknown>;
+  auth?: { address?: string; chainId?: string };
+  input: z.infer<typeof SettleInput>;
+  runtime: { keeperhub: import("lucid-keeperhub").KeeperHubSlice["keeperhub"] };
+};
+
+async function settleHandler(ctx: SettleContext) {
+  // Passing the whole context lets the extension anchor the KeeperHub key to
+  // the buyer's Idempotency-Key. `runId` would not do: Lucid mints a new one
+  // for every HTTP request, retries included.
+  const outcome = await ctx.runtime.keeperhub.settle(
+    {
+      chainId: CHAIN_ID,
+      recipientAddress: ctx.input.recipient,
+      amount: ctx.input.amount,
+      ...(ctx.input.tokenAddress ? { tokenAddress: ctx.input.tokenAddress } : {}),
+    },
+    { context: ctx }
+  );
+
+  return {
+    output: {
+      status: outcome.status,
+      executionId: outcome.executionId,
+      transactionHash: outcome.transactionHash,
+      transactionLink: outcome.transactionLink,
+      replayed: outcome.replayed,
+      sponsored: outcome.sponsored,
+      workIdSource: outcome.workIdSource,
+      gasEstimate: outcome.gasEstimate,
+      error: outcome.error,
+    },
+  };
+}
+
 export async function buildSeller() {
   const builder = createAgent({
     name: "keeperhub-settlement-agent",
@@ -72,10 +113,10 @@ export async function buildSeller() {
   const runtime = await builder
     .addEntrypoint({
       key: "settle",
-      description: "Move value onchain through KeeperHub and return the transaction as proof.",
+      description:
+        "Operator path: move value onchain through KeeperHub and return the transaction as proof. Free; protect it before exposing it publicly.",
       input: SettleInput,
       output: SettleOutput,
-      ...(paymentsConfig ? { price: "0.01", paymentProtocol: "x402" as const } : {}),
       metadata: {
         keeperhub: {
           settles: true,
@@ -83,34 +124,24 @@ export async function buildSeller() {
           description: "Native or ERC-20 transfer executed by KeeperHub",
         },
       },
-      handler: async (ctx) => {
-        // Passing the whole context lets the extension anchor the KeeperHub
-        // key to the buyer's Idempotency-Key. `runId` would not do: Lucid
-        // mints a new one for every HTTP request, retries included.
-        const outcome = await ctx.runtime.keeperhub.settle(
-          {
-            chainId: CHAIN_ID,
-            recipientAddress: ctx.input.recipient,
-            amount: ctx.input.amount,
-            ...(ctx.input.tokenAddress ? { tokenAddress: ctx.input.tokenAddress } : {}),
-          },
-          { context: ctx }
-        );
-
-        return {
-          output: {
-            status: outcome.status,
-            executionId: outcome.executionId,
-            transactionHash: outcome.transactionHash,
-            transactionLink: outcome.transactionLink,
-            replayed: outcome.replayed,
-            sponsored: outcome.sponsored,
-            workIdSource: outcome.workIdSource,
-            gasEstimate: outcome.gasEstimate,
-            error: outcome.error,
-          },
-        };
+      handler: settleHandler,
+    })
+    .addEntrypoint({
+      key: "payout",
+      description: `Buy an onchain payout: pay $${PAYOUT_PRICE} in USDC over x402, and KeeperHub executes the transfer and returns the transaction.`,
+      input: SettleInput,
+      output: SettleOutput,
+      ...(paymentsConfig ? { price: PAYOUT_PRICE, paymentProtocol: "x402" as const } : {}),
+      metadata: {
+        keeperhub: {
+          settles: true,
+          chainId: CHAIN_ID,
+          description: "Paid over x402, executed by KeeperHub",
+        },
       },
+      // Lucid admits the x402 payment before this runs, and the keeperhub
+      // extension is ordered after payments, so settlement never precedes it.
+      handler: settleHandler,
     })
     .addEntrypoint({
       key: "quote",

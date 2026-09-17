@@ -47,7 +47,17 @@
 
   main { padding: 22px 28px 40px; max-width: 1360px; margin: 0 auto; }
 
-  .stats { display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; margin-bottom: 18px; }
+  .stats { display: grid; grid-template-columns: repeat(4, 1fr); gap: 14px; margin-bottom: 14px; }
+  .stat.money .value { color: var(--blue); }
+  .buy {
+    display: grid; grid-template-columns: 1fr auto; gap: 18px; align-items: center;
+    background: linear-gradient(90deg, rgba(122,167,255,0.10), rgba(52,211,153,0.06));
+    border: 1px solid var(--line-2); border-radius: 12px; padding: 14px 18px; margin-bottom: 18px;
+  }
+  .buy strong { font-size: 15px; }
+  .buy p { margin: 3px 0 0; color: var(--muted); font-size: 13px; }
+  .buy .flow { margin-top: 6px; font: 12.5px var(--mono); color: var(--text); }
+  .buy .flow span { color: var(--faint); }
   .stat { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 14px 16px; }
   .stat .label { color: var(--muted); font-size: 12.5px; }
   .stat .value { font-size: 28px; font-weight: 650; letter-spacing: -0.02em; margin-top: 2px; font-variant-numeric: tabular-nums; }
@@ -129,6 +139,11 @@
 
 <main>
   <section class="stats">
+    <div class="stat money" id="stat-paid-tile">
+      <div class="label">Paid in over x402</div>
+      <div class="value mono" id="stat-paid" style="font-size:22px">...</div>
+      <div class="sub" id="stat-paid-delta">USDC received since this page opened: 0</div>
+    </div>
     <div class="stat">
       <div class="label">Settle requests sent</div>
       <div class="value" id="stat-requests">0</div>
@@ -140,10 +155,19 @@
       <div class="sub">Distinct transaction hashes returned</div>
     </div>
     <div class="stat">
-      <div class="label">Recipient balance, read from the chain</div>
+      <div class="label">Recipient balance, from the chain</div>
       <div class="value mono" id="stat-balance" style="font-size:22px">...</div>
       <div class="sub" id="stat-delta">Change since this page opened: 0</div>
     </div>
+  </section>
+
+  <section class="buy" id="buy-strip" hidden>
+    <div>
+      <strong>Another agent buys a payout</strong>
+      <p>A buyer agent with its own wallet pays over x402. Lucid admits the payment, then KeeperHub executes the payout.</p>
+      <div class="flow"><span>buyer</span> <b id="buyer-addr">...</b> <span>(</span><b id="buyer-usdc">...</b> <span>USDC)</span> <span>pays</span> $<b id="price">0.01</b> <span>USDC on Base Sepolia to</span> <b id="payto">...</b> <span>then KeeperHub pays the recipient on</span> <b id="payout-chain">...</b></div>
+    </div>
+    <button id="buy" class="primary">Buy a payout over x402</button>
   </section>
 
   <div class="grid">
@@ -224,6 +248,14 @@
     return frac ? `${whole}.${frac}` : `${whole}`;
   }
 
+  function formatUsdc(baseUnits) {
+    if (baseUnits == null) return "unavailable";
+    const v = BigInt(baseUnits);
+    const whole = v / 1000000n;
+    const frac = (v % 1000000n).toString().padStart(6, "0").replace(/0+$/, "");
+    return frac ? `${whole}.${frac}` : `${whole}`;
+  }
+
   function el(tag, attrs = {}, children = []) {
     const node = document.createElement(tag);
     for (const [k, v] of Object.entries(attrs)) {
@@ -277,15 +309,28 @@
 
   async function refreshBalance() {
     const recipient = $("recipient").value.trim();
-    if (!/^0x[0-9a-fA-F]{40}$/.test(recipient)) return;
-    const res = await fetch(`/demo/api/balances?addresses=${recipient}`);
-    const { balances } = await res.json();
+    const info = state.info || {};
+    const addresses = [recipient, info.payTo, info.buyer].filter((a) => /^0x[0-9a-fA-F]{40}$/.test(a || ""));
+    if (!addresses.length) return;
+    const res = await fetch(`/demo/api/balances?addresses=${addresses.join(",")}`);
+    const { balances, usdc } = await res.json();
+
     const wei = balances[recipient.toLowerCase()];
-    if (wei == null) return;
-    if (state.baseline === null) state.baseline = BigInt(wei);
-    $("stat-balance").textContent = `${formatUnits(wei)} ETH`;
-    const delta = BigInt(wei) - state.baseline;
-    $("stat-delta").textContent = `Change since this page opened: +${formatUnits(delta.toString())} ETH`;
+    if (wei != null) {
+      if (state.baseline === null) state.baseline = BigInt(wei);
+      $("stat-balance").textContent = `${formatUnits(wei)} ETH`;
+      const delta = BigInt(wei) - state.baseline;
+      $("stat-delta").textContent = `Change since this page opened: +${formatUnits(delta.toString())} ETH`;
+    }
+
+    const paid = info.payTo && usdc ? usdc[info.payTo.toLowerCase()] : null;
+    if (paid != null) {
+      if (state.paidBaseline === undefined) state.paidBaseline = BigInt(paid);
+      $("stat-paid").textContent = `${formatUsdc(paid)} USDC`;
+      $("stat-paid-delta").textContent = `USDC received since this page opened: +${formatUsdc((BigInt(paid) - state.paidBaseline).toString())}`;
+    }
+    const buyerUsdc = info.buyer && usdc ? usdc[info.buyer.toLowerCase()] : null;
+    if (buyerUsdc != null) $("buyer-usdc").textContent = formatUsdc(buyerUsdc);
   }
 
   async function invoke(entrypoint, { key, amount } = {}) {
@@ -381,6 +426,53 @@
 
   $("new-key").onclick = () => { $("key").value = newKey(); };
 
+  $("buy").onclick = () => run(async () => {
+    state.requests += 1;
+    renderStats();
+    const res = await fetch("/demo/api/buy", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        recipient: $("recipient").value.trim(),
+        amount: $("amount").value.trim(),
+        idempotencyKey: newKey(),
+      }),
+    });
+    const r = await res.json();
+    if (!res.ok) {
+      addEvent({ title: "Buyer agent could not buy a payout", badge: "not paid", tone: "red", rows: [["error", r.error, "bad"]], note: "No payment was made and nothing was sent." });
+      return;
+    }
+    const out = r.output || {};
+    if (out.transactionHash) state.hashes.add(out.transactionHash);
+    renderStats();
+
+    const paidOk = r.payment && r.payment.success !== false && r.payment.transaction;
+    const settled = out.status === "settled";
+    const info = state.info || {};
+    const card = addEvent({
+      title: "Buyer agent bought a payout over x402",
+      badge: paidOk && settled ? "paid + settled" : "failed",
+      tone: paidOk && settled ? "green" : "red",
+      request: `POST /entrypoints/payout/invoke   HTTP ${r.httpStatus ?? res.status}   (402 challenge, then PAYMENT-SIGNATURE)`,
+      rows: [
+        ["x402 price", r.challenge ? `${formatUsdc(r.challenge.amount)} USDC on Base Sepolia` : undefined],
+        ["paid to", r.challenge?.payTo ? `${short(r.challenge.payTo)} (seller's KeeperHub wallet)` : undefined],
+        ["buyer wallet", r.buyer ? short(r.buyer) : undefined],
+        ["payment settled", paidOk ? short(r.payment.transaction) : undefined, "ok", paidOk ? `${info.paymentExplorer}/tx/${r.payment.transaction}` : undefined],
+        ["lucid run id", r.runId],
+        ["keeperhub key anchor", out.workIdSource],
+        ["payout transaction", out.transactionHash ? short(out.transactionHash) : undefined, "ok", out.transactionLink],
+        ["error", out.error || (r.error ? JSON.stringify(r.error) : undefined), "bad"],
+      ],
+      note: paidOk && settled
+        ? `USDC in over x402 on Base Sepolia, value out through KeeperHub on ${info.chainName}. Two chains, two transactions, one purchase.`
+        : "The purchase did not complete.",
+    });
+    await attachAudit(card, out.executionId);
+    await refreshBalance();
+  });
+
   $("quote").onclick = () => run(async () => {
     const { res, body } = await invoke("quote");
     const out = body.output || {};
@@ -426,6 +518,15 @@
     $("amount").value = info.amount || "0.0001";
     $("restarts").textContent = `Seller restarts: ${info.restarts}`;
     $("capability").textContent = JSON.stringify(info.capability, null, 2);
+    if (info.paymentsEnabled && info.buyer) {
+      $("buy-strip").hidden = false;
+      $("buyer-addr").textContent = short(info.buyer);
+      $("payto").textContent = short(info.payTo);
+      $("price").textContent = info.payoutPrice;
+      $("payout-chain").textContent = info.chainName;
+    } else {
+      $("stat-paid-tile").hidden = true;
+    }
     await refreshBalance();
     setInterval(() => { if (!state.busy) refreshBalance().catch(() => {}); }, 8000);
   })();
