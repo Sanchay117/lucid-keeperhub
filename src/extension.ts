@@ -90,6 +90,8 @@ export type KeeperHubSlice = {
     simulate(request: TransferRequest, signal?: AbortSignal): Promise<{
       ok: boolean;
       gasEstimate?: string;
+      /** The KeeperHub org wallet the transfer would be sent from. */
+      from?: string;
       reason?: string;
     }>;
     /** Reads a stored execution -- the authoritative record for a hash. */
@@ -221,7 +223,7 @@ export function keeperhub(
               const simulation = await client.simulateTransfer(withDefaultChain(request), {
                 signal,
               });
-              return { ok: true, gasEstimate: simulation.gasEstimate };
+              return { ok: true, gasEstimate: simulation.gasEstimate, from: simulation.from };
             } catch (error) {
               const reason =
                 error instanceof KeeperHubError

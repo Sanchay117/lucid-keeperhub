@@ -1,0 +1,435 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Settlement console · Lucid Agents x KeeperHub</title>
+<style>
+  :root {
+    --bg: #0a0f1a;
+    --panel: #111827;
+    --panel-2: #0d1422;
+    --line: #1e293b;
+    --line-2: #273449;
+    --text: #e5eaf1;
+    --muted: #8b98ab;
+    --faint: #5b687c;
+    --green: #34d399;
+    --green-bg: rgba(52, 211, 153, 0.12);
+    --amber: #fbbf24;
+    --amber-bg: rgba(251, 191, 36, 0.12);
+    --red: #f87171;
+    --red-bg: rgba(248, 113, 113, 0.12);
+    --blue: #7aa7ff;
+    --blue-bg: rgba(122, 167, 255, 0.12);
+    --mono: ui-monospace, "SF Mono", SFMono-Regular, Menlo, Consolas, monospace;
+    --sans: -apple-system, BlinkMacSystemFont, "Inter", "Segoe UI", Roboto, sans-serif;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; background: var(--bg); color: var(--text); font: 14px/1.5 var(--sans); }
+  a { color: var(--blue); text-decoration: none; }
+  a:hover { text-decoration: underline; }
+  .mono { font-family: var(--mono); font-size: 12.5px; }
+
+  header {
+    display: flex; align-items: center; justify-content: space-between; gap: 16px; flex-wrap: wrap;
+    padding: 18px 28px; border-bottom: 1px solid var(--line); background: var(--panel-2);
+  }
+  .brand h1 { margin: 0; font-size: 17px; font-weight: 650; letter-spacing: -0.01em; }
+  .brand p { margin: 2px 0 0; color: var(--muted); font-size: 13px; }
+  .meta { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+  .pill {
+    display: inline-flex; align-items: center; gap: 6px; padding: 4px 10px;
+    border: 1px solid var(--line-2); border-radius: 999px; color: var(--muted); font-size: 12.5px;
+    background: var(--panel);
+  }
+  .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--green); box-shadow: 0 0 0 3px var(--green-bg); }
+
+  main { padding: 22px 28px 40px; max-width: 1360px; margin: 0 auto; }
+
+  .stats { display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; margin-bottom: 18px; }
+  .stat { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 14px 16px; }
+  .stat .label { color: var(--muted); font-size: 12.5px; }
+  .stat .value { font-size: 28px; font-weight: 650; letter-spacing: -0.02em; margin-top: 2px; font-variant-numeric: tabular-nums; }
+  .stat .sub { color: var(--faint); font-size: 12.5px; margin-top: 2px; }
+  .stat.proof .value { color: var(--green); }
+
+  .grid { display: grid; grid-template-columns: 400px 1fr; gap: 18px; align-items: start; }
+  @media (max-width: 980px) { .grid, .stats { grid-template-columns: 1fr; } }
+
+  .card { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; }
+  .card + .card { margin-top: 14px; }
+  .card h2 { margin: 0; padding: 14px 16px 0; font-size: 13px; font-weight: 600; color: var(--muted); text-transform: uppercase; letter-spacing: 0.06em; }
+  .card .body { padding: 12px 16px 16px; }
+
+  label { display: block; color: var(--muted); font-size: 12.5px; margin: 10px 0 5px; }
+  label:first-child { margin-top: 0; }
+  .field { display: flex; gap: 8px; }
+  input {
+    width: 100%; background: var(--panel-2); color: var(--text); border: 1px solid var(--line-2);
+    border-radius: 8px; padding: 8px 10px; font: 12.5px var(--mono);
+  }
+  input:focus { outline: none; border-color: var(--blue); }
+
+  button {
+    font: 600 13px var(--sans); color: var(--text); background: var(--panel-2);
+    border: 1px solid var(--line-2); border-radius: 8px; padding: 8px 12px; cursor: pointer; white-space: nowrap;
+  }
+  button:hover:not(:disabled) { border-color: var(--faint); }
+  button:disabled { opacity: 0.45; cursor: progress; }
+  button.primary { background: var(--text); color: var(--bg); border-color: var(--text); }
+  .actions { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 14px; }
+
+  .scenario { display: grid; grid-template-columns: 1fr auto; gap: 10px; align-items: center; padding: 11px 0; border-top: 1px solid var(--line); }
+  .scenario:first-child { border-top: 0; padding-top: 2px; }
+  .scenario strong { display: block; font-size: 13.5px; }
+  .scenario span { color: var(--muted); font-size: 12.5px; }
+
+  pre.cap { margin: 0; max-height: 210px; overflow: auto; background: var(--panel-2); border: 1px solid var(--line); border-radius: 8px; padding: 10px; color: var(--muted); }
+
+  .timeline-head { display: flex; justify-content: space-between; align-items: center; padding: 14px 16px 0; }
+  .timeline-head h2 { padding: 0; }
+  #events { padding: 12px 16px 16px; display: flex; flex-direction: column; gap: 10px; min-height: 420px; }
+  .empty { color: var(--faint); text-align: center; padding: 60px 20px; border: 1px dashed var(--line-2); border-radius: 10px; }
+
+  .event { border: 1px solid var(--line); border-radius: 10px; background: var(--panel-2); overflow: hidden; animation: in .25s ease-out; }
+  @keyframes in { from { opacity: 0; transform: translateY(-4px); } to { opacity: 1; transform: none; } }
+  .event.system { border-style: dashed; }
+  .event-head { display: flex; align-items: center; gap: 10px; padding: 10px 12px; }
+  .event-head .title { font-weight: 600; font-size: 13.5px; }
+  .event-head .time { margin-left: auto; color: var(--faint); font-size: 12px; font-variant-numeric: tabular-nums; }
+  .badge { font: 700 11px var(--sans); letter-spacing: 0.05em; padding: 3px 8px; border-radius: 6px; text-transform: uppercase; }
+  .badge.green { color: var(--green); background: var(--green-bg); }
+  .badge.amber { color: var(--amber); background: var(--amber-bg); }
+  .badge.red { color: var(--red); background: var(--red-bg); }
+  .badge.blue { color: var(--blue); background: var(--blue-bg); }
+  .req { padding: 0 12px 8px; color: var(--muted); }
+  .facts { display: grid; grid-template-columns: 170px 1fr; gap: 3px 12px; padding: 10px 12px; border-top: 1px solid var(--line); }
+  .facts dt { color: var(--muted); font-size: 12.5px; }
+  .facts dd { margin: 0; font: 12.5px var(--mono); word-break: break-all; }
+  .facts dd.ok { color: var(--green); }
+  .facts dd.warn { color: var(--amber); }
+  .facts dd.bad { color: var(--red); }
+  .audit-title { padding: 8px 12px 0; border-top: 1px solid var(--line); color: var(--muted); font-size: 11.5px; text-transform: uppercase; letter-spacing: 0.06em; font-weight: 600; }
+  .note { padding: 9px 12px; border-top: 1px solid var(--line); color: var(--text); font-size: 13px; background: rgba(255,255,255,0.02); }
+</style>
+</head>
+<body>
+<header>
+  <div class="brand">
+    <h1>Settlement console</h1>
+    <p>A Lucid Agents seller that settles onchain through KeeperHub</p>
+  </div>
+  <div class="meta">
+    <span class="pill"><span class="dot"></span><span id="chain">loading</span></span>
+    <span class="pill">KeeperHub wallet <span class="mono" id="sender">...</span></span>
+    <a class="pill" href="/.well-known/agent-card.json" target="_blank" rel="noopener">Agent card</a>
+  </div>
+</header>
+
+<main>
+  <section class="stats">
+    <div class="stat">
+      <div class="label">Settle requests sent</div>
+      <div class="value" id="stat-requests">0</div>
+      <div class="sub">Every request, retries included</div>
+    </div>
+    <div class="stat proof">
+      <div class="label">Transfers broadcast</div>
+      <div class="value" id="stat-transfers">0</div>
+      <div class="sub">Distinct transaction hashes returned</div>
+    </div>
+    <div class="stat">
+      <div class="label">Recipient balance, read from the chain</div>
+      <div class="value mono" id="stat-balance" style="font-size:22px">...</div>
+      <div class="sub" id="stat-delta">Change since this page opened: 0</div>
+    </div>
+  </section>
+
+  <div class="grid">
+    <div>
+      <section class="card">
+        <h2>Buyer request</h2>
+        <div class="body">
+          <label for="recipient">Recipient</label>
+          <input id="recipient" spellcheck="false">
+          <label for="amount">Amount (native token)</label>
+          <input id="amount" spellcheck="false">
+          <label for="key">Idempotency-Key</label>
+          <div class="field">
+            <input id="key" spellcheck="false">
+            <button id="new-key" title="Generate a new key">New key</button>
+          </div>
+          <div class="actions">
+            <button id="quote">Dry run</button>
+            <button id="settle" class="primary">Settle</button>
+          </div>
+        </div>
+      </section>
+
+      <section class="card">
+        <h2>Off the happy path</h2>
+        <div class="body">
+          <div class="scenario">
+            <div><strong>Retry the same request</strong><span>Same key. Lucid replays it from its idempotency store.</span></div>
+            <button id="retry">Retry</button>
+          </div>
+          <div class="scenario">
+            <div><strong>Restart the seller, then retry</strong><span>Empties Lucid's store, so the handler runs again with a new runId. KeeperHub has to catch it.</span></div>
+            <button id="restart">Restart + retry</button>
+          </div>
+          <div class="scenario">
+            <div><strong>Retry without a key</strong><span>Nothing can match this to a past transfer, so the seller refuses to send.</span></div>
+            <button id="nokey">Send</button>
+          </div>
+          <div class="scenario">
+            <div><strong>Try to overdraw</strong><span>More than the wallet holds. The dry run stops it before gas is spent.</span></div>
+            <button id="overdraw">Overdraw</button>
+          </div>
+        </div>
+      </section>
+
+      <section class="card">
+        <h2>What buyers discover</h2>
+        <div class="body">
+          <pre class="cap mono" id="capability">loading</pre>
+        </div>
+      </section>
+    </div>
+
+    <section class="card">
+      <div class="timeline-head">
+        <h2>Timeline</h2>
+        <span class="pill" id="restarts">Seller restarts: 0</span>
+      </div>
+      <div id="events"><div class="empty">Send a request to see each step: the Lucid invocation, how KeeperHub keyed it, and the execution record KeeperHub kept.</div></div>
+    </section>
+  </div>
+</main>
+
+<script>
+(() => {
+  const $ = (id) => document.getElementById(id);
+  const state = { info: null, requests: 0, hashes: new Set(), baseline: null, busy: false };
+
+  const newKey = () => `order-${crypto.randomUUID()}`;
+  const short = (v) => (v && v.length > 14 ? `${v.slice(0, 8)}...${v.slice(-6)}` : v || "");
+  const now = () => new Date().toLocaleTimeString([], { hour12: false });
+
+  function formatUnits(weiString) {
+    if (weiString == null) return "unavailable";
+    const wei = BigInt(weiString);
+    const whole = wei / 10n ** 18n;
+    const frac = (wei % 10n ** 18n).toString().padStart(18, "0").slice(0, 6).replace(/0+$/, "");
+    return frac ? `${whole}.${frac}` : `${whole}`;
+  }
+
+  function el(tag, attrs = {}, children = []) {
+    const node = document.createElement(tag);
+    for (const [k, v] of Object.entries(attrs)) {
+      if (k === "class") node.className = v;
+      else if (k === "text") node.textContent = v;
+      else node.setAttribute(k, v);
+    }
+    for (const child of [].concat(children)) if (child) node.append(child);
+    return node;
+  }
+
+  function facts(rows) {
+    const dl = el("dl", { class: "facts" });
+    for (const [label, value, tone, href] of rows) {
+      if (value === undefined || value === null || value === "") continue;
+      dl.append(el("dt", { text: label }));
+      const dd = el("dd", { class: tone || "" });
+      if (href) dd.append(el("a", { href, target: "_blank", rel: "noopener", text: String(value) }));
+      else dd.textContent = String(value);
+      dl.append(dd);
+    }
+    return dl;
+  }
+
+  function addEvent({ title, badge, tone, request, rows, note, system }) {
+    const list = $("events");
+    list.querySelector(".empty")?.remove();
+    const card = el("article", { class: `event${system ? " system" : ""}` }, [
+      el("div", { class: "event-head" }, [
+        badge ? el("span", { class: `badge ${tone}`, text: badge }) : null,
+        el("span", { class: "title", text: title }),
+        el("span", { class: "time", text: now() }),
+      ]),
+      request ? el("div", { class: "req mono", text: request }) : null,
+      rows ? facts(rows) : null,
+      note ? el("div", { class: "note", text: note }) : null,
+    ]);
+    list.prepend(card);
+    return card;
+  }
+
+  function setBusy(busy) {
+    state.busy = busy;
+    for (const b of document.querySelectorAll("button")) b.disabled = busy;
+  }
+
+  function renderStats() {
+    $("stat-requests").textContent = state.requests;
+    $("stat-transfers").textContent = state.hashes.size;
+  }
+
+  async function refreshBalance() {
+    const recipient = $("recipient").value.trim();
+    if (!/^0x[0-9a-fA-F]{40}$/.test(recipient)) return;
+    const res = await fetch(`/demo/api/balances?addresses=${recipient}`);
+    const { balances } = await res.json();
+    const wei = balances[recipient.toLowerCase()];
+    if (wei == null) return;
+    if (state.baseline === null) state.baseline = BigInt(wei);
+    $("stat-balance").textContent = `${formatUnits(wei)} ETH`;
+    const delta = BigInt(wei) - state.baseline;
+    $("stat-delta").textContent = `Change since this page opened: +${formatUnits(delta.toString())} ETH`;
+  }
+
+  async function invoke(entrypoint, { key, amount } = {}) {
+    const headers = { "content-type": "application/json" };
+    if (key) headers["Idempotency-Key"] = key;
+    const res = await fetch(`/entrypoints/${entrypoint}/invoke`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({
+        input: { recipient: $("recipient").value.trim(), amount: amount ?? $("amount").value.trim() },
+      }),
+    });
+    const body = await res.json().catch(() => ({}));
+    return { res, body };
+  }
+
+  async function attachAudit(card, executionId) {
+    if (!executionId) return;
+    const res = await fetch(`/demo/api/execution/${executionId}`);
+    const record = await res.json();
+    if (!res.ok) return;
+    const receipt = (record.receipts || [])[0];
+    card.append(el("div", { class: "audit-title", text: "KeeperHub execution record" }));
+    card.append(facts([
+      ["execution id", record.executionId],
+      ["status", record.status, record.status === "completed" ? "ok" : "warn"],
+      ["gas sponsored", record.sponsored === true ? "yes, KeeperHub paid the gas" : record.sponsored === false ? "no" : undefined],
+      ["receipt", receipt ? `${receipt.receiptStatus}, verified: ${receipt.verified}` : undefined, receipt?.receiptStatus === "success" ? "ok" : "warn"],
+      ["block", receipt?.blockNumber],
+      ["gas used", receipt?.gasUsed],
+      ["recorded", record.createdAt ? new Date(record.createdAt).toLocaleString() : undefined],
+    ]));
+  }
+
+  async function settle({ title, key, amount }) {
+    state.requests += 1;
+    renderStats();
+    const { res, body } = await invoke("settle", { key, amount });
+    const out = body.output || {};
+    const luciReplayed = res.headers.get("Idempotency-Replayed") === "true";
+
+    if (!res.ok) {
+      addEvent({
+        title, badge: "error", tone: "red",
+        request: `POST /entrypoints/settle/invoke   HTTP ${res.status}`,
+        rows: [["error", JSON.stringify(body.error || body), "bad"]],
+      });
+      return;
+    }
+
+    if (out.transactionHash) state.hashes.add(out.transactionHash);
+    renderStats();
+
+    let badge = "settled", tone = "green", note;
+    if (out.status !== "settled") { badge = out.status === "failed" ? "not sent" : out.status; tone = "red"; }
+    if (luciReplayed) {
+      badge = "replayed by Lucid"; tone = "amber";
+      note = "Lucid recognised the Idempotency-Key and returned the stored response. The handler did not run.";
+    } else if (out.replayed) {
+      badge = "replayed by KeeperHub"; tone = "amber";
+      note = "The handler ran again with a new runId, but KeeperHub matched the Idempotency-Key to the earlier transfer and returned it. No second transaction.";
+    } else if (out.status === "settled") {
+      note = "One transfer broadcast and confirmed by KeeperHub.";
+    } else if (out.error) {
+      note = "Nothing was broadcast.";
+    }
+
+    const card = addEvent({
+      title, badge, tone,
+      request: `POST /entrypoints/settle/invoke   ${key ? `Idempotency-Key: ${key}` : "(no Idempotency-Key)"}`,
+      rows: [
+        ["lucid run id", body.run_id],
+        ["lucid replayed", luciReplayed ? "yes, handler skipped" : "no, handler ran", luciReplayed ? "warn" : ""],
+        ["keeperhub key anchor", out.workIdSource],
+        ["keeperhub replayed", out.replayed === undefined ? undefined : out.replayed ? "yes, no new transaction" : "no", out.replayed ? "warn" : ""],
+        ["dry-run gas estimate", out.gasEstimate],
+        ["transaction", out.transactionHash ? short(out.transactionHash) : undefined, "ok", out.transactionLink],
+        ["error", out.error, "bad"],
+      ],
+      note,
+    });
+    if (!luciReplayed) await attachAudit(card, out.executionId);
+    await refreshBalance();
+  }
+
+  async function run(fn) {
+    if (state.busy) return;
+    setBusy(true);
+    try { await fn(); }
+    catch (error) { addEvent({ title: "Request failed", badge: "error", tone: "red", rows: [["error", String(error), "bad"]] }); }
+    finally { setBusy(false); }
+  }
+
+  $("new-key").onclick = () => { $("key").value = newKey(); };
+
+  $("quote").onclick = () => run(async () => {
+    const { res, body } = await invoke("quote");
+    const out = body.output || {};
+    addEvent({
+      title: "Dry run", badge: out.ok ? "would succeed" : "would fail", tone: out.ok ? "blue" : "red",
+      request: "POST /entrypoints/quote/invoke",
+      rows: [
+        ["http", res.status],
+        ["from", out.from],
+        ["gas estimate", out.gasEstimate],
+        ["reason", out.reason, "bad"],
+      ],
+      note: "Validated against live chain state. Nothing signed, nothing broadcast, no execution row written.",
+    });
+  });
+
+  $("settle").onclick = () => run(() => settle({ title: "Settle", key: $("key").value.trim() }));
+  $("retry").onclick = () => run(() => settle({ title: "Retry, same key", key: $("key").value.trim() }));
+
+  $("restart").onclick = () => run(async () => {
+    const res = await fetch("/demo/api/restart", { method: "POST" });
+    const { restarts } = await res.json();
+    $("restarts").textContent = `Seller restarts: ${restarts}`;
+    addEvent({
+      title: "Seller restarted", badge: "restart", tone: "blue", system: true,
+      note: "New Lucid runtime. Its in-memory idempotency store is empty, so it has no memory of earlier requests.",
+    });
+    await settle({ title: "Retry after restart, same key", key: $("key").value.trim() });
+  });
+
+  $("nokey").onclick = () => run(() => settle({ title: "Retry without a key", key: undefined }));
+
+  $("overdraw").onclick = () => run(() => settle({ title: "Overdraw attempt", key: newKey(), amount: "1000" }));
+
+  (async () => {
+    $("key").value = newKey();
+    const info = await (await fetch("/demo/api/info")).json();
+    state.info = info;
+    $("chain").textContent = info.chainName;
+    $("sender").textContent = info.sender ? short(info.sender) : "unknown";
+    $("sender").title = info.sender || "";
+    $("recipient").value = info.recipient || "";
+    $("amount").value = info.amount || "0.0001";
+    $("restarts").textContent = `Seller restarts: ${info.restarts}`;
+    $("capability").textContent = JSON.stringify(info.capability, null, 2);
+    await refreshBalance();
+    setInterval(() => { if (!state.busy) refreshBalance().catch(() => {}); }, 8000);
+  })();
+})();
+</script>
+</body>
+</html>
