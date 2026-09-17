@@ -10,8 +10,17 @@ export {
   KEEPERHUB_EXTENSION_URI,
   type EntrypointSettlementConfig,
   type KeeperHubExtensionOptions,
+  type KeeperHubSettleOptions,
   type KeeperHubSlice,
 } from "./extension.js";
+
+export {
+  idempotencyKeyOf,
+  resolveWorkId,
+  type InvocationContext,
+  type ResolvedWorkId,
+  type WorkIdSource,
+} from "./work-id.js";
 
 export { KeeperHubClient, type ExecuteOptions, type KeeperHubClientOptions } from "./client.js";
 

@@ -41,6 +41,8 @@ export type SettlementOutcome = {
   error?: string;
   /** The stored execution record, when we read it back. */
   execution?: ExecutionStatusResult;
+  /** What the idempotency key was anchored to, when settled via a Lucid invocation. */
+  workIdSource?: "idempotency-key" | "run-id" | "explicit";
 };
 
 export type SettleOptions = ExecuteOptions & {

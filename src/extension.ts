@@ -26,6 +26,7 @@ import type {
 import { KeeperHubClient, type KeeperHubClientOptions } from "./client.js";
 import { KeeperHubError } from "./errors.js";
 import { settleTransfer, type SettleOptions, type SettlementOutcome } from "./settle.js";
+import { resolveWorkId, type InvocationContext } from "./work-id.js";
 import type { ExecutionStatusResult, SpendCapResult, TransferRequest } from "./types.js";
 
 /** URI identifying this capability in an A2A agent card. */
@@ -50,6 +51,26 @@ export type KeeperHubExtensionOptions = Omit<KeeperHubClientOptions, "apiKey"> &
   advertise?: boolean;
   /** Defaults applied to every settlement call. */
   settlementDefaults?: Pick<SettleOptions, "preflight" | "confirm" | "maxPolls" | "pollIntervalMs">;
+  /**
+   * Refuse to settle an invocation whose buyer sent no `Idempotency-Key`.
+   * Default false.
+   *
+   * Without the header the only anchor is the per-request `runId`, which a
+   * buyer retry does not reuse. Turn this on for any entrypoint where paying
+   * twice is worse than rejecting a request that cannot be made safe.
+   */
+  requireIdempotencyKey?: boolean;
+};
+
+/** Options for `runtime.keeperhub.settle`. */
+export type KeeperHubSettleOptions = SettleOptions & {
+  /**
+   * The Lucid handler context. Pass it and the extension anchors the
+   * idempotency key to the buyer's `Idempotency-Key` header, falling back to
+   * `runId`. Takes precedence over nothing: an explicit `workId` or
+   * `idempotencyKey` still wins.
+   */
+  context?: InvocationContext;
 };
 
 /** The runtime slice this extension contributes. */
@@ -60,11 +81,11 @@ export type KeeperHubSlice = {
     /**
      * Settles a transfer, deriving the idempotency key from the invocation.
      *
-     * Pass the handler's `runId` as `workId`. That single argument is what
-     * makes a retried invocation reuse KeeperHub's stored outcome instead of
-     * broadcasting a second transaction.
+     * Pass the handler context as `{ context: ctx }`. The key is then anchored
+     * to the buyer's `Idempotency-Key`, which survives a buyer retry and a
+     * seller restart; `runId` alone survives neither.
      */
-    settle(request: TransferRequest, options?: SettleOptions): Promise<SettlementOutcome>;
+    settle(request: TransferRequest, options?: KeeperHubSettleOptions): Promise<SettlementOutcome>;
     /** Dry-runs a transfer without signing. Safe under an `mcp:read` key. */
     simulate(request: TransferRequest, signal?: AbortSignal): Promise<{
       ok: boolean;
@@ -165,11 +186,34 @@ export function keeperhub(
         keeperhub: {
           client,
 
-          settle(request, settleOptions = {}) {
-            return settleTransfer(client, withDefaultChain(request), {
+          async settle(request, settleOptions = {}) {
+            const { context, ...rest } = settleOptions;
+            let workIdSource: SettlementOutcome["workIdSource"] =
+              rest.workId !== undefined || rest.idempotencyKey !== undefined
+                ? "explicit"
+                : undefined;
+
+            if (context && workIdSource === undefined) {
+              const resolved = resolveWorkId(context);
+              if (options.requireIdempotencyKey && resolved.source !== "idempotency-key") {
+                return {
+                  status: "failed",
+                  executionId: "",
+                  replayed: false,
+                  workIdSource: resolved.source,
+                  error:
+                    "Idempotency-Key header required: without it a retry of this request cannot be matched to its transfer, so nothing was sent.",
+                };
+              }
+              rest.workId = resolved.workId;
+              workIdSource = resolved.source;
+            }
+
+            const outcome = await settleTransfer(client, withDefaultChain(request), {
               ...defaults,
-              ...settleOptions,
+              ...rest,
             });
+            return workIdSource ? { ...outcome, workIdSource } : outcome;
           },
 
           async simulate(request, signal) {

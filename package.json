@@ -54,6 +54,7 @@
   },
   "devDependencies": {
     "@lucid-agents/core": "^5.0.0",
+    "@lucid-agents/http": "^4.0.0",
     "@lucid-agents/types": "^3.0.0",
     "@types/node": "^22.10.0",
     "typescript": "^5.7.0",
