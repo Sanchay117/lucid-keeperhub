@@ -240,7 +240,7 @@ await slide(`
     <li><b>Agent-to-agent commerce</b>: a buyer pays over Lucid's x402 flow; KeeperHub executes what was bought.</li>
     <li><b>Two layers of idempotency</b>: Lucid's HTTP store, backed by KeeperHub's execution record keyed to the buyer's request.</li>
     <li><b>Retry policy that cannot double-send</b>, following KeeperHub's error semantics.</li>
-    <li><b>85 tests</b>, including settle, restart, retry through the real Lucid HTTP stack: one transfer.</li>
+    <li><b>88 tests</b> against real Lucid runtimes: restart-and-retry sends one transfer; no settlement before x402 admission.</li>
   </ul>
 `, 12000);
 

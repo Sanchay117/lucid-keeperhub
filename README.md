@@ -3,9 +3,10 @@
 **Deterministic onchain settlement for [Lucid Agents](https://github.com/daydreamsai/lucid-agents), executed through [KeeperHub](https://keeperhub.com).**
 
 A Lucid extension that gives a selling agent somewhere safe to put the onchain
-half of its work: dry-run preflight, broadcast through KeeperHub's executor, a
-verifiable transaction hash for the buyer, and a guarantee that a retried
-request does not pay twice, even across a seller restart.
+half of its work. Another agent pays over Lucid's x402 flow; KeeperHub executes
+what was bought: dry-run preflight, broadcast, a verifiable transaction hash for
+the buyer, and a guarantee that a retried request does not pay out twice, even
+across a seller restart.
 
 ```ts
 const runtime = await createAgent({ name: 'payout', version: '1.0.0' })
@@ -151,7 +152,22 @@ Errors follow KeeperHub's mandated discriminator order (`code`, then
 `failureKind`, then `wouldRevert`), and anything unattributable defaults to not
 retryable.
 
-### 5. Discovery
+### 5. Agent-to-agent commerce: x402 in, KeeperHub out
+
+The example seller exposes a priced `payout` entrypoint. A buyer agent with its
+own wallet calls it through Lucid's own `createX402Fetch`: Lucid answers with a
+402 challenge ($0.01 USDC on Base Sepolia, payable to the seller's KeeperHub
+wallet), the buyer signs, the facilitator settles, and only then does the
+handler settle the payout through KeeperHub. Revenue lands in the same wallet
+KeeperHub pays out from.
+
+The extension is ordered `after: ['payments', 'mpp']`, so settlement cannot run
+before admission whatever order the extensions are installed in.
+`src/__tests__/payment-ordering.test.ts` proves it through the real
+`@lucid-agents/payments` extension: an unpaid call and a rejected payment both
+return without the handler running or KeeperHub being called.
+
+### 6. Discovery
 
 `onManifestBuild` adds the capability to the A2A agent card, so a buying agent
 learns this seller settles deterministically before it invokes anything:
@@ -245,7 +261,10 @@ node --experimental-strip-types src/index.ts
 ```
 
 Open `http://localhost:8787/demo`. Every button calls the agent's real Lucid
-entrypoints. Or call them directly:
+entrypoints. To enable the x402 purchase, set `PAYMENTS_FACILITATOR_URL`,
+`PAYMENTS_NETWORK`, `PAYMENTS_RECEIVABLE_ADDRESS` and a throwaway
+`BUYER_PRIVATE_KEY` holding Base Sepolia USDC from faucet.circle.com (see
+`.env.example`). Or call the entrypoints directly:
 
 ```bash
 curl localhost:8787/.well-known/agent-card.json
@@ -255,21 +274,19 @@ curl -X POST localhost:8787/entrypoints/settle/invoke \
   -d '{"input":{"recipient":"0x...","amount":"0.0001"}}'
 ```
 
-Set `PAYMENTS_FACILITATOR_URL`, `PAYMENTS_RECEIVABLE_ADDRESS` and
-`PAYMENTS_NETWORK` to price `settle` in x402 USDC.
-
 ## Develop
 
 ```bash
 npm run type-check
-npm test        # 85 tests
+npm test        # 88 tests
 npm run build
 ```
 
-Tests run against the real `@lucid-agents/core` and `@lucid-agents/http`
-runtimes, not stand-ins: extension ordering, slice conflicts, entrypoint hooks,
-manifest composition and HTTP idempotency are all enforced by Lucid's own code.
-Only KeeperHub is stubbed.
+Tests run against the real `@lucid-agents/core`, `@lucid-agents/http` and
+`@lucid-agents/payments` runtimes, not stand-ins: extension ordering, slice
+conflicts, entrypoint hooks, manifest composition, HTTP idempotency and x402
+admission are all enforced by Lucid's own code. Only KeeperHub and the x402
+facilitator are stubbed.
 
 ## Limitations
 
@@ -277,9 +294,13 @@ Only KeeperHub is stubbed.
   but `settle()` wraps native and ERC-20 transfers only.
 - **EVM only.** KeeperHub's Solana path is not targeted.
 - **Polling, not callbacks.** `settle` polls the status endpoint.
-- **The x402 path is the least exercised.** The agent prices `settle` in x402
-  USDC when payments are configured, but the recorded runs use free
-  entrypoints and real KeeperHub settlement.
+- **A paid retry after a seller restart can charge the buyer again.** KeeperHub
+  still sends one payout, because the key is the buyer's `Idempotency-Key`, but
+  the spent x402 authorization cannot be replayed, so the buyer's x402 client
+  pays a fresh one. Lucid's x402 payment-identifier reconciliation is built to
+  close this and is not wired up here.
+- **Lucid reports a buyer's insufficient USDC as a 503** "verification
+  temporarily unavailable". The console checks the buyer's balance first.
 - **`runId` fallback is weak by design.** Without an `Idempotency-Key` the
   settlement is safe only against retries inside one invocation. Use
   `requireIdempotencyKey` where that is not enough.
