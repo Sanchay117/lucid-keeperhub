@@ -28,6 +28,8 @@ const runtime = await createAgent({ name: 'payout', version: '1.0.0' })
 
 ![Settlement console](docs/console.png)
 
+Demo video: [docs/demo.mp4](docs/demo.mp4) (2.5 min, recorded against Ethereum Sepolia by `scripts/video/record.mjs`).
+
 ## Proof
 
 Executed through KeeperHub on Ethereum Sepolia, gas sponsored by KeeperHub:

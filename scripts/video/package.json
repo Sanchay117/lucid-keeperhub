@@ -1,0 +1,12 @@
+{
+  "name": "lucid-keeperhub-demo-video",
+  "private": true,
+  "type": "module",
+  "description": "Records the submission demo video against the running settlement agent.",
+  "scripts": {
+    "record": "node record.mjs"
+  },
+  "devDependencies": {
+    "playwright": "^1.54.2"
+  }
+}

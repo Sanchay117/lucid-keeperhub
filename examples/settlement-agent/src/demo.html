@@ -33,7 +33,7 @@
 
   header {
     display: flex; align-items: center; justify-content: space-between; gap: 16px; flex-wrap: wrap;
-    padding: 18px 28px; border-bottom: 1px solid var(--line); background: var(--panel-2);
+    padding: 18px max(28px, calc((100% - 1360px) / 2 + 28px)); border-bottom: 1px solid var(--line); background: var(--panel-2);
   }
   .brand h1 { margin: 0; font-size: 17px; font-weight: 650; letter-spacing: -0.01em; }
   .brand p { margin: 2px 0 0; color: var(--muted); font-size: 13px; }
