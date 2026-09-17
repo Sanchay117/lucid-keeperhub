@@ -134,8 +134,7 @@ createAgent(meta).use(http()).<span class="h">use(keeperhub({ requireIdempotency
 
 await page.goto(`${BASE}/demo`);
 await page.waitForFunction(() => document.getElementById("sender").textContent !== "...", null, { timeout: 30_000 });
-// Slightly larger than 1:1 so the console stays legible in a small player.
-await page.evaluate(() => (document.documentElement.style.zoom = "1.1"));
+
 await wait(1500);
 await caption("A Lucid agent that sells settlement. Every button calls its real Lucid HTTP entrypoints, on Ethereum Sepolia.");
 await wait(6000);
@@ -148,71 +147,97 @@ await page.evaluate(() => window.scrollTo({ top: 0, behavior: "smooth" }));
 await wait(1200);
 
 let n = await eventCount();
-await caption("Dry run through KeeperHub: validated against live chain state. Nothing signed, nothing sent.");
-await press("quote");
+await caption("Another agent buys a payout. Lucid answers with an x402 challenge: $0.01 USDC on Base Sepolia, payable to the seller's KeeperHub wallet...");
+await press("buy");
 await untilEvents(n + 1);
-await wait(5000);
+await caption("...the buyer pays, Lucid admits the payment, and KeeperHub executes the payout. USDC in on Base Sepolia, ETH out on Sepolia.");
+await wait(10000);
 
 n = await eventCount();
-await caption("Settle. KeeperHub dry-runs, broadcasts one transfer and waits for the receipt...");
+await caption("Now the unhappy paths. A settle request with an Idempotency-Key: KeeperHub dry-runs, broadcasts and confirms one transfer...");
 await press("settle");
 await untilEvents(n + 1);
-await caption("One transfer, confirmed. KeeperHub's execution record: verified receipt, gas sponsored. Balance read from the chain.");
-await wait(8500);
+await caption("One transfer, with KeeperHub's execution record: verified receipt, gas sponsored.");
+await wait(6500);
 
 n = await eventCount();
 await caption("The buyer retries with the same Idempotency-Key. Lucid replays its stored response; the handler never runs.");
 await press("retry");
 await untilEvents(n + 1);
-await wait(6500);
+await wait(6000);
 
 n = await eventCount();
 await caption("Now restart the seller. Lucid's idempotency store is gone, so the handler runs again with a brand-new runId...");
 await press("restart");
 await untilEvents(n + 2);
-await caption("...and KeeperHub matches the buyer's key to the original transfer. Three requests. Still one transfer.");
-await wait(9500);
+await caption("...and KeeperHub matches the buyer's key to the original transfer. No second transaction.");
+await wait(9000);
 
 n = await eventCount();
 await caption("A request with no Idempotency-Key cannot be made safe to retry, so the seller refuses to send it.");
 await press("nokey");
 await untilEvents(n + 1);
-await wait(6000);
+await wait(5500);
 
 n = await eventCount();
-await caption("Overdraw: asking for more than the wallet holds. KeeperHub's dry run stops it. No transaction, no gas.");
+await caption("Overdraw: more than the wallet holds. KeeperHub's dry run stops it. No transaction, no gas.");
 await press("overdraw");
 await untilEvents(n + 1);
-await wait(6500);
+await wait(6000);
 
-await caption("Five settle requests. One transfer on chain.");
-await wait(5000);
+await caption("Six requests. One paid purchase and one settle, each executed exactly once.");
+await wait(5500);
 await caption("");
 await wait(400);
 await page.screenshot({ path: `${DOCS}console.png` });
 
-const txLink = await page.evaluate(() => [...document.querySelectorAll("#events a")].map((a) => a.href).find((h) => h.includes("/tx/")));
-if (txLink) {
-  const hash = txLink.split("/tx/")[1];
-  // The internal-transactions tab, not the summary: the transfer is relayed,
-  // so the top-level call carries 0 ETH and the value moves one call deeper.
-  await page.goto(`https://eth-sepolia.blockscout.com/tx/${hash}?tab=internal`, { waitUntil: "domcontentloaded" });
+const links = await page.evaluate(() => {
+  const purchase = [...document.querySelectorAll("#events article")].find((a) => a.innerText.includes("bought a payout"));
+  const hrefs = purchase ? [...purchase.querySelectorAll("a")].map((a) => a.href) : [];
+  return {
+    payment: hrefs.find((h) => h.includes("base-sepolia.blockscout.com/tx/")),
+    payout: hrefs.find((h) => h.includes("/tx/") && !h.includes("base-sepolia")),
+  };
+});
+
+async function explorerScene(url, rowText, text) {
+  await page.goto(url, { waitUntil: "domcontentloaded" });
   await page
-    .waitForFunction(() => [...document.querySelectorAll("tr")].some((r) => r.innerText.includes("0.0001")), null, { timeout: 60_000 })
+    .waitForFunction((t) => [...document.querySelectorAll("tr")].some((r) => r.innerText.includes(t)), rowText, { timeout: 60_000 })
     .catch(() => {});
   await wait(1200);
-  await caption("On a public explorer: 0.0001 ETH from the KeeperHub wallet to the recipient, submitted by a relayer that paid the gas.");
-  await page.evaluate(() => {
-    const row = [...document.querySelectorAll("tr")].find((r) => r.innerText.includes("0.0001"));
+  await caption(text);
+  await page.evaluate((t) => {
+    const row = [...document.querySelectorAll("tr")].find((r) => r.innerText.includes(t));
     if (row) row.style.cssText += ";outline:3px solid #fbbf24;outline-offset:-3px;background:#fffbeb";
-  });
-  await wait(9000);
+  }, rowText);
+  await wait(8500);
+}
+
+if (links.payment) {
+  const hash = links.payment.split("/tx/")[1];
+  await explorerScene(
+    `https://base-sepolia.blockscout.com/tx/${hash}?tab=token_transfers`,
+    "USDC",
+    "Value in: the x402 payment on Base Sepolia, 0.01 USDC from the buyer agent to the seller's KeeperHub wallet."
+  );
+}
+if (links.payout) {
+  // Internal transactions, not the summary: the payout is relayed, so the
+  // top-level call carries 0 ETH and the value moves one call deeper.
+  const hash = links.payout.split("/tx/")[1];
+  await explorerScene(
+    `https://eth-sepolia.blockscout.com/tx/${hash}?tab=internal`,
+    "0.0001",
+    "Value out: the payout KeeperHub executed on Sepolia, 0.0001 ETH from the KeeperHub wallet to the recipient, gas paid by a relayer."
+  );
 }
 
 await slide(`
   <div class="kicker">What was built</div>
   <ul>
     <li><b>keeperhub()</b> Lucid extension: typed runtime slice, build-time validation, A2A capability advertisement.</li>
+    <li><b>Agent-to-agent commerce</b>: a buyer pays over Lucid's x402 flow; KeeperHub executes what was bought.</li>
     <li><b>Two layers of idempotency</b>: Lucid's HTTP store, backed by KeeperHub's execution record keyed to the buyer's request.</li>
     <li><b>Retry policy that cannot double-send</b>, following KeeperHub's error semantics.</li>
     <li><b>85 tests</b>, including settle, restart, retry through the real Lucid HTTP stack: one transfer.</li>
@@ -222,7 +247,7 @@ await slide(`
 await slide(`
   <div class="kicker">lucid-keeperhub</div>
   <h2>Lucid Agents sells the work.<br>KeeperHub moves the money, once.</h2>
-  <p class="lead">KeeperHub surfaces: Direct Execution API, dry-run simulation, idempotency, execution audit trail.</p>
+  <p class="lead">Lucid: extension API, x402 payments, HTTP idempotency, A2A agent card.<br>KeeperHub: Direct Execution API, dry runs, idempotency, execution audit trail.</p>
 `, 7000);
 
 const video = page.video();
