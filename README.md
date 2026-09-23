@@ -2,6 +2,9 @@
 
 **Deterministic onchain settlement for [Lucid Agents](https://github.com/daydreamsai/lucid-agents), executed through [KeeperHub](https://keeperhub.com).**
 
+> **Second place out of 139 entries** at the [KeeperHub Agent Economy Hackathon](https://dorahacks.io/hackathon/agent-economy/detail).
+> [BUIDL page](https://dorahacks.io/buidl/48859) &middot; [demo video](https://youtu.be/fsq0WomZSbo)
+
 A Lucid extension that gives a selling agent somewhere safe to put the onchain
 half of its work. Another agent pays over Lucid's x402 flow; KeeperHub executes
 what was bought: dry-run preflight, broadcast, a verifiable transaction hash for
@@ -29,7 +32,7 @@ const runtime = await createAgent({ name: 'payout', version: '1.0.0' })
 
 ![Settlement console](docs/console.png)
 
-Demo video: [docs/demo.mp4](docs/demo.mp4) (3.5 min, narrated). It is recorded end to end against Base Sepolia and Ethereum Sepolia by `scripts/video/record.mjs`: a real x402 purchase, the retry and restart scenarios, and both transactions on a public explorer.
+Demo video: [on YouTube](https://youtu.be/fsq0WomZSbo), or [docs/demo.mp4](docs/demo.mp4) (3.5 min, narrated). It is recorded end to end against Base Sepolia and Ethereum Sepolia by `scripts/video/record.mjs`: a real x402 purchase, the retry and restart scenarios, and both transactions on a public explorer.
 
 ## Proof
 
