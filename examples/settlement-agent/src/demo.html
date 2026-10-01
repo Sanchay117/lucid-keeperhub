@@ -199,7 +199,7 @@
             <button id="retry">Retry</button>
           </div>
           <div class="scenario">
-            <div><strong>Restart the seller, then retry</strong><span>Empties Lucid's store, so the handler runs again with a new runId. KeeperHub has to catch it.</span></div>
+            <div><strong>Restart the seller, then retry</strong><span>Wipes Lucid's store too, the worst case, so the handler runs again with a new runId. KeeperHub has to catch it.</span></div>
             <button id="restart">Restart + retry</button>
           </div>
           <div class="scenario">
@@ -373,10 +373,15 @@
     const luciReplayed = res.headers.get("Idempotency-Replayed") === "true";
 
     if (!res.ok) {
+      const message = body.error && body.error.message;
+      const notSent = /no value was transferred/.test(message || "");
       addEvent({
-        title, badge: "error", tone: "red",
-        request: `POST /entrypoints/settle/invoke   HTTP ${res.status}`,
-        rows: [["error", JSON.stringify(body.error || body), "bad"]],
+        title, badge: notSent ? "not sent" : "error", tone: "red",
+        request: `POST /entrypoints/settle/invoke   ${key ? `Idempotency-Key: ${key}` : "(no Idempotency-Key)"}   HTTP ${res.status}`,
+        rows: [["error", message || JSON.stringify(body.error || body), "bad"]],
+        note: notSent
+          ? "Nothing was broadcast. The handler threw instead of returning, so on a paid entrypoint Lucid cancels the buyer's charge."
+          : undefined,
       });
       return;
     }
@@ -463,11 +468,13 @@
         ["lucid run id", r.runId],
         ["keeperhub key anchor", out.workIdSource],
         ["payout transaction", out.transactionHash ? short(out.transactionHash) : undefined, "ok", out.transactionLink],
-        ["error", out.error || (r.error ? JSON.stringify(r.error) : undefined), "bad"],
+        ["error", out.error || (r.error ? r.error.message || JSON.stringify(r.error) : undefined), "bad"],
       ],
       note: paidOk && settled
         ? `USDC in over x402 on Base Sepolia, value out through KeeperHub on ${info.chainName}. Two chains, two transactions, one purchase.`
-        : "The purchase did not complete.",
+        : paidOk
+          ? "The purchase did not complete."
+          : "The purchase did not complete. No x402 payment was settled, so the buyer was not charged.",
     });
     await attachAudit(card, out.executionId);
     await refreshBalance();
@@ -498,7 +505,7 @@
     $("restarts").textContent = `Seller restarts: ${restarts}`;
     addEvent({
       title: "Seller restarted", badge: "restart", tone: "blue", system: true,
-      note: "New Lucid runtime. Its in-memory idempotency store is empty, so it has no memory of earlier requests.",
+      note: "New Lucid runtime, with its idempotency store wiped, so it has no memory of earlier requests. A real restart keeps the store on disk.",
     });
     await settle({ title: "Retry after restart, same key", key: $("key").value.trim() });
   });

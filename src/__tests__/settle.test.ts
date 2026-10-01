@@ -188,6 +188,41 @@ describe("duplicate handling", () => {
   });
 });
 
+describe("broadcast failures", () => {
+  it("reports a 5xx as unconfirmed, because the transfer may have executed", async () => {
+    // Keyed, so the client retries the 5xx under the same key before giving up.
+    const gatewayError = { status: 502, body: { error: "Bad gateway" } };
+    const { client } = stub([okSimulation, gatewayError, gatewayError, gatewayError, gatewayError]);
+
+    const outcome = await settleTransfer(client, request, { workId: "run_1" });
+
+    expect(outcome.status).toBe("unconfirmed");
+  });
+
+  it("keeps a rejection the API attributes as failed", async () => {
+    const { client } = stub([okSimulation, { status: 403, body: { error: "Daily spend cap exceeded" } }]);
+
+    const outcome = await settleTransfer(client, request, { workId: "run_1" });
+
+    expect(outcome.status).toBe("failed");
+    expect(outcome.error).toContain("spend cap");
+  });
+
+  it("treats a failure carrying a hash as live, unless the transaction reverted", async () => {
+    const live = stub([okSimulation, { status: 400, body: { error: "Receipt not confirmed", transactionHash: "0xlive" } }]);
+    const liveOutcome = await settleTransfer(live.client, request, { workId: "run_1" });
+    expect(liveOutcome.status).toBe("unconfirmed");
+    expect(liveOutcome.transactionHash).toBe("0xlive");
+
+    const reverted = stub([
+      okSimulation,
+      { status: 400, body: { failureKind: "revert", revertReason: "transfer amount exceeds balance", transactionHash: "0xrev" } },
+    ]);
+    const revertedOutcome = await settleTransfer(reverted.client, request, { workId: "run_1" });
+    expect(revertedOutcome.status).toBe("failed");
+  });
+});
+
 describe("unrecoverable conditions", () => {
   it("throws rather than reporting a settlement outcome for a bad credential", async () => {
     const { client } = stub([

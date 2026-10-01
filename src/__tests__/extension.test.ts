@@ -10,6 +10,7 @@ import { describe, expect, it, vi } from "vitest";
 import { z } from "zod";
 
 import { keeperhub, KEEPERHUB_EXTENSION_URI } from "../extension.js";
+import { KeeperHubSettlementError } from "../settle.js";
 
 const meta = { name: "settlement-agent", version: "1.0.0", description: "test" };
 
@@ -227,6 +228,42 @@ describe("settlement from inside a handler", () => {
     } as never);
 
     expect(JSON.parse(calls[0]!).chainId).toBe("84532");
+    await runtime.close();
+  });
+
+  it("throws when no value was transferred, so a priced entrypoint charges nothing", async () => {
+    const fetch = fetchStub([
+      { status: 400, body: { code: "insufficient_balance", error: "Insufficient balance" } },
+    ]);
+    const runtime = await createAgent(meta).use(keeperhub(options(fetch))).build();
+
+    const settling = runtime.keeperhub.settle(
+      { chainId: 84532, recipientAddress: "0x742d35Cc6634C0532925a3b844Bc454e4438f44e", amount: "1000" },
+      { workId: "run_abc" }
+    );
+
+    await expect(settling).rejects.toBeInstanceOf(KeeperHubSettlementError);
+    await expect(settling).rejects.toMatchObject({ outcome: { status: "failed" } });
+    await runtime.close();
+  });
+
+  it("resolves an unconfirmed settlement rather than throwing, since value may be moving", async () => {
+    const gatewayError = { status: 502, body: { error: "Bad gateway" } };
+    const fetch = fetchStub([
+      { status: 200, body: { success: true, status: "simulated", gasEstimate: "21000", wouldRevert: false } },
+      gatewayError,
+      gatewayError,
+      gatewayError,
+      gatewayError,
+    ]);
+    const runtime = await createAgent(meta).use(keeperhub(options(fetch))).build();
+
+    const outcome = await runtime.keeperhub.settle(
+      { chainId: 84532, recipientAddress: "0x742d35Cc6634C0532925a3b844Bc454e4438f44e", amount: "0.01" },
+      { workId: "run_abc" }
+    );
+
+    expect(outcome.status).toBe("unconfirmed");
     await runtime.close();
   });
 

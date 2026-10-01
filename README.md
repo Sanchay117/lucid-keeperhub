@@ -20,6 +20,7 @@ const runtime = await createAgent({ name: 'payout', version: '1.0.0' })
     input: z.object({ recipient: z.string(), amount: z.string() }),
     metadata: { keeperhub: { settles: true } },
     handler: async (ctx) => {
+      // Throws when nothing was sent, so a paying buyer is not charged.
       const outcome = await ctx.runtime.keeperhub.settle(
         { recipientAddress: ctx.input.recipient, amount: ctx.input.amount },
         { context: ctx },   // anchors KeeperHub's idempotency to the buyer's request
@@ -141,6 +142,11 @@ was broadcast. `settleTransfer` always reads the stored execution back, surfaces
 checks conclude nothing happened), and treats a verified reverted receipt as a
 failure even though a hash exists.
 
+`failed` is reserved for outcomes where no value moved: a dry-run revert or
+shortfall, a rejection KeeperHub attributes (validation, spend cap), or a
+reverted transaction. A `5xx`, a dropped connection or a live hash during the
+broadcast is `unconfirmed`, because the transfer may have executed.
+
 ### 4. A retry policy that cannot double-send
 
 | Condition | Retried? | Why |
@@ -161,15 +167,30 @@ retryable.
 The example seller exposes a priced `payout` entrypoint. A buyer agent with its
 own wallet calls it through Lucid's own `createX402Fetch`: Lucid answers with a
 402 challenge ($0.01 USDC on Base Sepolia, payable to the seller's KeeperHub
-wallet), the buyer signs, the facilitator settles, and only then does the
-handler settle the payout through KeeperHub. Revenue lands in the same wallet
-KeeperHub pays out from.
+wallet), the buyer signs, the facilitator verifies the payment, and the handler
+settles the payout through KeeperHub. Lucid settles the buyer's USDC only after
+the handler returns, and cancels it when the handler fails. Revenue lands in
+the same wallet KeeperHub pays out from.
+
+So the buyer pays only for a payout that happened. `settle()` throws
+`KeeperHubSettlementError` when no value moved, instead of returning a `failed`
+outcome that Lucid would count as a success and charge for.
 
 The extension is ordered `after: ['payments', 'mpp']`, so settlement cannot run
 before admission whatever order the extensions are installed in.
-`src/__tests__/payment-ordering.test.ts` proves it through the real
-`@lucid-agents/payments` extension: an unpaid call and a rejected payment both
-return without the handler running or KeeperHub being called.
+`src/__tests__/payment-ordering.test.ts` proves both through the real
+`@lucid-agents/payments` extension: an unpaid call and a rejected payment
+return without the handler running or KeeperHub being called, and a payout
+that fails is never charged.
+
+A priced entrypoint also needs a durable Lucid idempotency store
+(`http({ idempotency: { store } })`). With the default in-memory one, a buyer
+retrying after a seller restart pays a second time, because its x402 client
+signs a fresh authorization. KeeperHub still sends one payout. With a durable
+store, Lucid replays the stored response before payment admission and the
+retry is not charged. The example seller keeps its store in a JSON file
+(`examples/settlement-agent/src/idempotency-store.ts`); several instances need
+a shared one.
 
 ### 6. Discovery
 
@@ -231,11 +252,17 @@ after payment admission has decided the invocation is entitled to it.
 | `settlingEntrypoints()` | Entrypoints that declared settlement. |
 | `client` | The underlying `KeeperHubClient`. |
 
-`settle` resolves rather than throwing for onchain failure: a reverted or
-underfunded transfer is an outcome to report to the buyer. It throws only for
+`settle` resolves to `settled` or `unconfirmed`. When no value was transferred
+(a reverted or underfunded transfer, or a missing key under
+`requireIdempotencyKey`) it throws `KeeperHubSettlementError`, with the outcome
+on `.outcome`: inside a Lucid handler a returned value is a success, and a
+priced entrypoint charges the buyer for every success. It also throws for
 conditions per-request handling cannot fix (bad credentials, scope, missing
 wallet). Outcomes include `workIdSource` (`idempotency-key`, `run-id` or
 `explicit`) so a caller can see how safe a retry was.
+
+`settleTransfer`, the framework-free function underneath, never throws for an
+onchain failure and returns `failed` instead.
 
 Declaring `metadata: { keeperhub: { settles: true, chainId } }` on an entrypoint
 is validated at build time: an entrypoint that settles but names no chain fails
@@ -282,7 +309,7 @@ curl -X POST localhost:8787/entrypoints/settle/invoke \
 
 ```bash
 npm run type-check
-npm test        # 88 tests
+npm test        # 97 tests
 npm run build
 ```
 
@@ -298,11 +325,13 @@ facilitator are stubbed.
   but `settle()` wraps native and ERC-20 transfers only.
 - **EVM only.** KeeperHub's Solana path is not targeted.
 - **Polling, not callbacks.** `settle` polls the status endpoint.
-- **A paid retry after a seller restart can charge the buyer again.** KeeperHub
-  still sends one payout, because the key is the buyer's `Idempotency-Key`, but
-  the spent x402 authorization cannot be replayed, so the buyer's x402 client
-  pays a fresh one. Lucid's x402 payment-identifier reconciliation is built to
-  close this and is not wired up here.
+- **A paid retry is charged once only while Lucid remembers it.** A durable
+  store covers a restart, but a retry that arrives after the store lost the
+  record (retention expired, store wiped, or a crash between charging and
+  recording the response) is charged again. KeeperHub still sends one payout.
+- **An `unconfirmed` payout is charged.** The transfer was accepted and may
+  still land, so the buyer pays and gets the execution id to check. A retry
+  with the same key replays it rather than sending again.
 - **Lucid reports a buyer's insufficient USDC as a 503** "verification
   temporarily unavailable". The console checks the buyer's balance first.
 - **`runId` fallback is weak by design.** Without an `Idempotency-Key` the

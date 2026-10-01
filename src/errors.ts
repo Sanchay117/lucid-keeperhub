@@ -54,6 +54,9 @@ export type KeeperHubErrorBody = {
   granted_scope?: string;
   originalExecutionId?: string;
   idempotentReplay?: boolean;
+  /** Present when the failure came after a transaction was broadcast. */
+  transactionHash?: string;
+  transactionLink?: string;
 };
 
 export class KeeperHubError extends Error {

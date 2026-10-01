@@ -45,6 +45,27 @@ export type SettlementOutcome = {
   workIdSource?: "idempotency-key" | "run-id" | "explicit";
 };
 
+/**
+ * Thrown by `runtime.keeperhub.settle` when a settlement failed and no value
+ * was transferred.
+ *
+ * Inside a Lucid handler, returning is succeeding, and a priced entrypoint
+ * collects the buyer's x402 payment for every success. A payout that sent
+ * nothing has to throw instead, so Lucid answers with an error and cancels the
+ * charge. The outcome stays available on `outcome`.
+ */
+export class KeeperHubSettlementError extends Error {
+  readonly outcome: SettlementOutcome;
+
+  constructor(outcome: SettlementOutcome) {
+    super(
+      `Settlement failed, no value was transferred: ${outcome.error ?? "no reason given"}`
+    );
+    this.name = "KeeperHubSettlementError";
+    this.outcome = outcome;
+  }
+}
+
 export type SettleOptions = ExecuteOptions & {
   /**
    * Run a dry run before broadcasting. Default true. Disable only for work
@@ -140,6 +161,24 @@ export async function settleTransfer(
         replayed: true,
         gasEstimate,
         error: "Settlement already in progress under this idempotency key",
+      };
+    }
+
+    // Only a rejection the API attributes proves nothing moved. A 5xx, a
+    // dropped connection or an unattributed failure may have executed and
+    // failed only on the way back, and a hash means a transaction is live
+    // (one that reverted moved nothing). Calling those failed tells the caller
+    // it can refund and send again, which is how an agent double-pays.
+    const liveHash = error.kind === "revert" ? undefined : error.body.transactionHash;
+    if (error.kind === "unavailable" || error.kind === "unknown" || liveHash) {
+      return {
+        status: "unconfirmed",
+        executionId: error.originalExecutionId ?? "",
+        transactionHash: liveHash,
+        transactionLink: liveHash ? error.body.transactionLink : undefined,
+        replayed: false,
+        gasEstimate,
+        error: error.revertReason ?? error.message,
       };
     }
 

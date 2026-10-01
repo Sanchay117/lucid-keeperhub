@@ -25,6 +25,7 @@ export {
 export { KeeperHubClient, type ExecuteOptions, type KeeperHubClientOptions } from "./client.js";
 
 export {
+  KeeperHubSettlementError,
   settleTransfer,
   type SettleOptions,
   type SettlementOutcome,

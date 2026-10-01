@@ -12,14 +12,15 @@
  * verifiable transaction hash rather than an agent's assurance that it paid.
  *
  * Built by a function rather than at module scope so the demo console can
- * restart it: a fresh runtime has a fresh, empty Lucid idempotency store, which
- * is exactly the condition under which the KeeperHub layer has to hold.
+ * restart it. The console wipes Lucid's idempotency store as it does, which is
+ * exactly the condition under which the KeeperHub layer has to hold.
  */
 
 import { createAgent } from "@lucid-agents/core";
 import { createAgentApp } from "@lucid-agents/hono";
 import { http } from "@lucid-agents/http";
 import { payments, paymentsFromEnv } from "@lucid-agents/payments";
+import type { HttpIdempotencyStore } from "@lucid-agents/types/http";
 import { keeperhub } from "lucid-keeperhub";
 import { z } from "zod";
 
@@ -68,6 +69,9 @@ async function settleHandler(ctx: SettleContext) {
   // Passing the whole context lets the extension anchor the KeeperHub key to
   // the buyer's Idempotency-Key. `runId` would not do: Lucid mints a new one
   // for every HTTP request, retries included.
+  //
+  // When nothing was sent this throws rather than returning, so the invocation
+  // fails and Lucid cancels a paying buyer's x402 charge.
   const outcome = await ctx.runtime.keeperhub.settle(
     {
       chainId: CHAIN_ID,
@@ -93,14 +97,16 @@ async function settleHandler(ctx: SettleContext) {
   };
 }
 
-export async function buildSeller() {
+export async function buildSeller(options: { idempotencyStore?: HttpIdempotencyStore } = {}) {
   const builder = createAgent({
     name: "keeperhub-settlement-agent",
     version: "1.0.0",
     description:
       "Executes onchain value transfer deterministically through KeeperHub, with dry-run preflight and a per-execution audit trail.",
   })
-    .use(http())
+    // A paid entrypoint needs a store that outlives the process: with the
+    // default in-memory one, a buyer's retry after a restart is charged again.
+    .use(http(options.idempotencyStore ? { idempotency: { store: options.idempotencyStore } } : undefined))
     // A settlement a buyer cannot safely retry is refused rather than sent.
     .use(keeperhub({ defaultChainId: CHAIN_ID, requireIdempotencyKey: true }));
 

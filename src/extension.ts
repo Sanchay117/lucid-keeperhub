@@ -12,8 +12,9 @@
  *
  * This extension fills that gap with KeeperHub rather than a signer. The
  * runtime gains a `keeperhub` slice whose settlement calls are idempotent by
- * construction (keyed on the Lucid `runId`), preflighted by default, and
- * observable afterwards through KeeperHub's stored execution record.
+ * construction (keyed on the buyer's `Idempotency-Key`), preflighted by
+ * default, and observable afterwards through KeeperHub's stored execution
+ * record.
  */
 
 import type {
@@ -25,7 +26,12 @@ import type {
 
 import { KeeperHubClient, type KeeperHubClientOptions } from "./client.js";
 import { KeeperHubError } from "./errors.js";
-import { settleTransfer, type SettleOptions, type SettlementOutcome } from "./settle.js";
+import {
+  KeeperHubSettlementError,
+  settleTransfer,
+  type SettleOptions,
+  type SettlementOutcome,
+} from "./settle.js";
 import { resolveWorkId, type InvocationContext } from "./work-id.js";
 import type { ExecutionStatusResult, SpendCapResult, TransferRequest } from "./types.js";
 
@@ -84,6 +90,10 @@ export type KeeperHubSlice = {
      * Pass the handler context as `{ context: ctx }`. The key is then anchored
      * to the buyer's `Idempotency-Key`, which survives a buyer retry and a
      * seller restart; `runId` alone survives neither.
+     *
+     * Resolves only to `settled` or `unconfirmed`. When no value was
+     * transferred it throws `KeeperHubSettlementError`, so the handler fails
+     * and a priced entrypoint does not collect the buyer's payment.
      */
     settle(request: TransferRequest, options?: KeeperHubSettleOptions): Promise<SettlementOutcome>;
     /** Dry-runs a transfer without signing. Safe under an `mcp:read` key. */
@@ -144,10 +154,11 @@ function readSettlementConfig(
  *     input: z.object({ to: z.string(), amount: z.string() }),
  *     output: z.object({ transactionHash: z.string().optional() }),
  *     metadata: { keeperhub: { settles: true } },
- *     handler: async ({ input, runId, runtime }) => {
- *       const outcome = await runtime.keeperhub.settle(
- *         { chainId: 84532, recipientAddress: input.to, amount: input.amount },
- *         { workId: runId },
+ *     handler: async (ctx) => {
+ *       // Throws when nothing was sent, so a priced entrypoint charges nothing.
+ *       const outcome = await ctx.runtime.keeperhub.settle(
+ *         { chainId: 84532, recipientAddress: ctx.input.to, amount: ctx.input.amount },
+ *         { context: ctx },
  *       );
  *       return { output: { transactionHash: outcome.transactionHash } };
  *     },
@@ -198,24 +209,29 @@ export function keeperhub(
             if (context && workIdSource === undefined) {
               const resolved = resolveWorkId(context);
               if (options.requireIdempotencyKey && resolved.source !== "idempotency-key") {
-                return {
+                throw new KeeperHubSettlementError({
                   status: "failed",
                   executionId: "",
                   replayed: false,
                   workIdSource: resolved.source,
                   error:
-                    "Idempotency-Key header required: without it a retry of this request cannot be matched to its transfer, so nothing was sent.",
-                };
+                    "Idempotency-Key header required: without it a retry of this request cannot be matched to its transfer.",
+                });
               }
               rest.workId = resolved.workId;
               workIdSource = resolved.source;
             }
 
-            const outcome = await settleTransfer(client, withDefaultChain(request), {
+            const settled = await settleTransfer(client, withDefaultChain(request), {
               ...defaults,
               ...rest,
             });
-            return workIdSource ? { ...outcome, workIdSource } : outcome;
+            const outcome = workIdSource ? { ...settled, workIdSource } : settled;
+
+            // Returning makes the invocation a success, and Lucid collects
+            // payment for a success. Nothing moved, so nothing may be charged.
+            if (outcome.status === "failed") throw new KeeperHubSettlementError(outcome);
+            return outcome;
           },
 
           async simulate(request, signal) {

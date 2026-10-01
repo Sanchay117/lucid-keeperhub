@@ -103,7 +103,14 @@ async function startSeller(fetch: typeof globalThis.fetch, extra: { requireIdemp
       }),
       { key: "settle" }
     );
-    return { res, body: (await res.json()) as { run_id: string; output: Record<string, unknown> } };
+    return {
+      res,
+      body: (await res.json()) as {
+        run_id: string;
+        output: Record<string, unknown>;
+        error?: { code: string; message: string };
+      },
+    };
   };
 
   return { runtime, invoke };
@@ -179,10 +186,12 @@ describe("buyer retries through @lucid-agents/http", () => {
     const kh = keeperhubStub();
     const seller = await startSeller(kh.fetch, { requireIdempotencyKey: true });
 
-    const { body } = await seller.invoke();
+    const { res, body } = await seller.invoke();
 
-    expect(body.output.status).toBe("failed");
-    expect(body.output.error).toMatch(/Idempotency-Key header required/);
+    // An error response, not a 200 carrying `failed`: on a priced entrypoint a
+    // 200 is what the buyer gets charged for.
+    expect(res.status).toBe(500);
+    expect(body.error?.message).toMatch(/Idempotency-Key header required/);
     expect(kh.broadcasts()).toBe(0);
     expect(kh.sent).toHaveLength(0);
     await seller.runtime.close();

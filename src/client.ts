@@ -48,8 +48,9 @@ const DEFAULT_MAX_ATTEMPTS = 4;
 /** Options carried on any call that can move value. */
 export type ExecuteOptions = {
   /**
-   * Stable identifier for this unit of work. In a Lucid handler this is the
-   * invocation `runId`. Omitting it disables idempotency entirely, which is
+   * Stable identifier for this unit of work. In a Lucid handler, pass the
+   * context to `runtime.keeperhub.settle` and it is derived from the buyer's
+   * `Idempotency-Key`. Omitting it disables idempotency entirely, which is
    * only ever correct for a read.
    */
   workId?: string;
